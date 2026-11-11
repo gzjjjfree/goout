@@ -57,9 +57,7 @@ func (pm *ProcessManager) GetLogs() []string {
 
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
 	targetDir := "/data/local/tmp"
-	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
-		targetDir = os.TempDir()
-	}
+	_ = os.MkdirAll(targetDir, 0755)
 	extractPath := filepath.Join(targetDir, "v2ray")
 	if err := os.WriteFile(extractPath, v2rayBinary, 0755); err != nil {
 		fallbackPath := filepath.Join(os.TempDir(), "v2ray")
