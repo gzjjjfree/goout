@@ -18,7 +18,7 @@ type Config struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		V2RayConfigPath: "/data/local/tmp/config.json",
+		V2RayConfigPath: "/data/local/tmp/goout.json",
 		SocksPort:       10808,
 		TunIP:           "10.0.0.2",
 		ServerAddress:   "127.0.0.1",
