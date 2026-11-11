@@ -57,14 +57,12 @@ func (pm *ProcessManager) GetLogs() []string {
 
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
 	targetDir := "/data/local/tmp"
-	_ = os.MkdirAll(targetDir, 0755)
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create target dir %s: %w", targetDir, err)
+	}
 	extractPath := filepath.Join(targetDir, "v2ray")
 	if err := os.WriteFile(extractPath, v2rayBinary, 0755); err != nil {
-		fallbackPath := filepath.Join(os.TempDir(), "v2ray")
-		if errFallback := os.WriteFile(fallbackPath, v2rayBinary, 0755); errFallback != nil {
-			return "", fmt.Errorf("failed to write embedded v2ray binary: %w, %w", err, errFallback)
-		}
-		return fallbackPath, nil
+		return "", fmt.Errorf("failed to write embedded v2ray binary to %s: %w", extractPath, err)
 	}
 	return extractPath, nil
 }
