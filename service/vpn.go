@@ -36,7 +36,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	// For cross-platform compilation/testing, we fallback or handle fd appropriately.
 	simulatedFD := -1 // In actual Android environment, obtain fd from VpnService.Builder()
 
-	// Call tun2socks JNI integration
+	// Call pure Go tunnel integration
 	jni.StartTun2Socks(simulatedFD, v.tunIP, v.gateway, socksAddr)
 
 	v.active = true

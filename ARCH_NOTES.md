@@ -3,8 +3,8 @@
 ## 1. Core Architecture & Module Design
 - **Entry Point**: [`main.go`](main.go:1) initializes Fyne app and calls [`ui.SetupDashboard`](ui/dashboard.go:1).
 - **Process Management (`core/process.go`)**: Manages subprocesses (v2ray) in `/data/local/tmp/` via Shizuku / context cancellation, thread-safe ring buffers (500 lines) for log streaming, and mutex locking.
-- **VPN Redirection (`service/vpn.go`)**: Manages Android `VpnService` permissions, TUN interfaces (`10.0.0.2`), and `0.0.0.0/0` traffic routing.
-- **JNI / Tun2socks (`jni/tun2socks.go` & `jni/tun2socks_stub.go`)**: Bridges C/Go for packet filtering and proxy tunneling with conditional build tags (`//go:build android` vs `//go:build !android`).
+- **VPN Redirection (`service/vpn.go`)**: Manages Android `VpnService` permissions, TUN interfaces (`10.0.0.2`), and `0.0.0.0/0` traffic routing using pure Go packet processing.
+- **Pure Go Network Stack (`jni/tun2socks.go` & `jni/tun2socks_stub.go`)**: Replaced CGO bindings and native `.so` libraries with a pure Go packet forwarding / SOCKS proxy tunnel implementation, eliminating all CGO dependencies and simplifying cross-compilation.
 - **Configuration (`data/config.go`)**: JSON serialization/deserialization for server settings, SOCKS port, TUN IP, and subscription management.
 - **UI & Thread Safety (`ui/dashboard.go`)**: Fyne-based control panel with start/stop toggle, settings dialog, asynchronous log updates using `fyne.Do`, and `container.NewBorder` layout ensuring the log scroll container extends vertically to the bottom of the window.
 
