@@ -6,7 +6,7 @@
 - **VPN Redirection (`service/vpn.go`)**: Manages Android `VpnService` permissions, TUN interfaces (`10.0.0.2`), and `0.0.0.0/0` traffic routing.
 - **JNI / Tun2socks (`jni/tun2socks.go` & `jni/tun2socks_stub.go`)**: Bridges C/Go for packet filtering and proxy tunneling with conditional build tags (`//go:build android` vs `//go:build !android`).
 - **Configuration (`data/config.go`)**: JSON serialization/deserialization for server settings, SOCKS port, TUN IP, and subscription management.
-- **UI & Thread Safety (`ui/dashboard.go`)**: Fyne-based control panel with start/stop toggle, settings dialog, and asynchronous log updates using `fyne.Do`.
+- **UI & Thread Safety (`ui/dashboard.go`)**: Fyne-based control panel with start/stop toggle, settings dialog, asynchronous log updates using `fyne.Do`, and `container.NewBorder` layout ensuring the log scroll container extends vertically to the bottom of the window.
 
 ## 2. AGENTS Guidance & AI Assistant Rules
 - Followed Go, Android, Fyne, and Shizuku integration guidelines.
@@ -15,3 +15,4 @@
 - **Completed**: All items in `todolist.md` are fully implemented and verified with unit tests (`data/config_test.go`, `core/process_test.go`) and successful build compilation.
 - **UI Theme**: Configured application theme to light (`theme.LightTheme()`) ensuring clear font color visibility and contrast across all dashboard and dialog components.
 - **V2Ray Integration Strategy**: V2Ray compiled binary (`v5-goout-android-arm64`) is statically embedded via `go:embed` into [`core/process.go`](core/process.go:15), automatically extracted and given executable permissions at runtime, and invoked via [`core/process.go`](core/process.go:57) `ProcessManager` using `exec.CommandContext` with `-config` parameter and real-time log streaming.
+- **Release Automation**: Added [`build.sh`](build.sh:1) script and GitHub Actions workflow [`.github/workflows/release.yml`](.github/workflows/release.yml:1) to automate cross-platform release compilation (Android arm64 via bundletool & macOS arm64 via fyne package) for GoOut (`com.gzjjjfree.goout`, key alias `goout-alias`).
