@@ -20,6 +20,7 @@ func SetupDashboard(w fyne.Window) {
 	}
 
 	logArea := widget.NewMultiLineEntry()
+	logArea.Wrapping = fyne.TextWrapWord
 	logArea.SetText("GoOut initialized successfully.\nReady to start proxy...")
 
 	// Callback for real-time log updates with fyne.Do (UI Thread Safety)
