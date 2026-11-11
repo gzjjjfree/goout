@@ -66,14 +66,15 @@ func SetupDashboard(w fyne.Window) {
 		showSettingsDialog(w, cfg)
 	})
 
-	content := container.NewVBox(
+	topContent := container.NewVBox(
 		widget.NewLabelWithStyle("GoOut Control Panel", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		statusLabel,
 		container.NewHBox(toggleBtn, configBtn),
 		widget.NewSeparator(),
 		widget.NewLabel("Logs:"),
-		container.NewVScroll(logArea),
 	)
+
+	content := container.NewBorder(topContent, nil, nil, nil, container.NewVScroll(logArea))
 
 	w.SetContent(content)
 	w.Resize(fyne.NewSize(450, 650))
