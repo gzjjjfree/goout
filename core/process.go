@@ -56,9 +56,17 @@ func (pm *ProcessManager) GetLogs() []string {
 }
 
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
-	extractPath := filepath.Join(os.TempDir(), "v2ray")
+	targetDir := "/data/local/tmp"
+	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+		targetDir = os.TempDir()
+	}
+	extractPath := filepath.Join(targetDir, "v2ray")
 	if err := os.WriteFile(extractPath, v2rayBinary, 0755); err != nil {
-		return "", fmt.Errorf("failed to write embedded v2ray binary: %w", err)
+		fallbackPath := filepath.Join(os.TempDir(), "v2ray")
+		if errFallback := os.WriteFile(fallbackPath, v2rayBinary, 0755); errFallback != nil {
+			return "", fmt.Errorf("failed to write embedded v2ray binary: %w, %w", err, errFallback)
+		}
+		return fallbackPath, nil
 	}
 	return extractPath, nil
 }
