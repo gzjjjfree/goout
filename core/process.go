@@ -3,20 +3,15 @@ package core
 import (
 	"bufio"
 	"context"
-	_ "embed"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
-//go:embed bin/libv2ray.so
-var v2rayBinary []byte
-
-// ProcessManager manages native binary execution (e.g. v2ray) in app private files storage (non-root sandbox).
+// ProcessManager manages native binary execution (e.g. v2ray) strictly via jniLibs (nativeLibraryDir).
 type ProcessManager struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
@@ -56,80 +51,34 @@ func (pm *ProcessManager) GetLogs() []string {
 	return copied
 }
 
-func getWritableDir(subPath ...string) string {
-	// 1. 优先检查 Android 沙盒环境（通过 UserHomeDir 判断）
-	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(home, "/data") {
-		pkgDir := home
-		// 如果返回的正好是 cache 或 files 目录，向上取到应用沙盒的根目录 (例如 /data/user/0/com.gzjjjfree.goout)
-		if filepath.Base(home) == "cache" || filepath.Base(home) == "files" {
-			pkgDir = filepath.Dir(home)
-		}
-
-		// 【核心关键】在 Android 上，可执行文件必须放在 files 目录下！
-		// 绝对不能使用 cache，因为 cache 目录拥有 noexec 限制，会导致 permission denied。
-		filesDir := filepath.Join(pkgDir, "code_cache")
-		target := filepath.Join(append([]string{filesDir}, subPath...)...)
-
-		if err := os.MkdirAll(target, 0700); err == nil {
-			return target
-		}
-	}
-
-	// 2. 桌面端（Windows/macOS/Linux）本地测试的兼容兜底
-	if home, err := os.UserHomeDir(); err == nil && home != "" && !strings.HasPrefix(home, "/data") {
-		target := filepath.Join(append([]string{home, ".goout"}, subPath...)...)
-		if err := os.MkdirAll(target, 0700); err == nil {
-			return target
-		}
-	}
-
-	// 3. 最终硬编码兜底（确保 Android 手机上万无一失指向 files 目录）
-	androidFiles := filepath.Join("/data/user/0/com.gzjjjfree.goout/code_cache", filepath.Join(subPath...))
-	_ = os.MkdirAll(androidFiles, 0700)
-	return androidFiles
-}
-
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
-	// 1. 优先检查 Android nativeLibraryDir (通过 jniLibs 自动解压到 /data/user/0/<pkg>/lib/libv2ray.so 或 /data/data/<pkg>/lib/libv2ray.so)
-	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(home, "/data") {
+	// 纯 jniLibs 方案：严格从系统的 nativeLibraryDir 读取 libv2ray.so，绝不进行运行时文件写入
+	var candidatePaths []string
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		pkgDir := home
-		if filepath.Base(home) == "cache" || filepath.Base(home) == "files" {
+		base := filepath.Base(home)
+		if base == "cache" || base == "files" || base == "code_cache" {
 			pkgDir = filepath.Dir(home)
 		}
-		nativeLibPath := filepath.Join(pkgDir, "lib", "libv2ray.so")
-		if _, err := os.Stat(nativeLibPath); err == nil {
-			pm.addLog("Using native library binary directly from nativeLibraryDir: %s", nativeLibPath)
-			return nativeLibPath, nil
+		candidatePaths = append(candidatePaths, filepath.Join(pkgDir, "lib", "libv2ray.so"))
+	}
+
+	// 添加标准的 Android 绝对路径兜底（非运行时写入，而是系统解压的目标位置）
+	candidatePaths = append(candidatePaths,
+		"/data/user/0/com.gzjjjfree.goout/lib/libv2ray.so",
+		"/data/data/com.gzjjjfree.goout/lib/libv2ray.so",
+	)
+
+	// 遍历查找系统已经解压好的 .so 文件
+	for _, path := range candidatePaths {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			pm.addLog("Found native library via jniLibs at: %s", path)
+			return path, nil
 		}
-		altPath := filepath.Join("/data/data", "com.gzjjjfree.goout", "lib", "libv2ray.so")
-		if _, err := os.Stat(altPath); err == nil {
-			pm.addLog("Using native library binary from alt nativeLibraryDir: %s", altPath)
-			return altPath, nil
-		}
 	}
 
-	// 2. 桌面端或测试环境兜底：写入到可写目录并赋予可执行权限
-	targetDir := getWritableDir("bin")
-	if err := os.MkdirAll(targetDir, 0700); err != nil {
-		return "", fmt.Errorf("failed to create target dir %s: %w", targetDir, err)
-	}
-
-	extractPath := filepath.Join(targetDir, "libv2ray.so")
-
-	if err := os.WriteFile(extractPath, v2rayBinary, 0700); err != nil {
-		return "", fmt.Errorf("failed to write v2ray binary to %s: %w", extractPath, err)
-	}
-
-	if err := os.Chmod(extractPath, 0700); err != nil {
-		return "", fmt.Errorf("failed to set executable permission on %s: %w", extractPath, err)
-	}
-
-	if info, err := os.Stat(extractPath); err != nil || info.Mode()&0100 == 0 {
-		return "", fmt.Errorf("extracted binary is not executable")
-	}
-
-	pm.addLog("Extracted v2ray binary to fallback storage: %s", extractPath)
-	return extractPath, nil
+	return "", fmt.Errorf("native library libv2ray.so not found in jniLibs. Ensure it is placed in app/src/main/jniLibs/arm64-v8a/ and android:extractNativeLibs='true'")
 }
 
 func (pm *ProcessManager) Start(configPath string) error {
