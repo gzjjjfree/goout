@@ -56,20 +56,54 @@ func (pm *ProcessManager) GetLogs() []string {
 	return copied
 }
 
-func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
-	// 1. 明确指定 Android 应用绝对私有的 files 目录（对应 v2rayNG 的 context.filesDir）
-	// 绝对不使用 os.UserHomeDir()，以防在 Fyne 运行环境中漂移到只读根目录 /
-	targetDir := "/data/user/0/com.gzjjjfree.goout/files/bin"
+func getWritableDir(subPath ...string) string {
+	candidates := []string{}
 
-	// 2. 如果是在电脑端（Windows/macOS/Linux）进行本地调试测试，可以通过 os.UserHomeDir() 兼容
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		// 判断如果不是 Android 环境（例如电脑上有类似 /Users/xxx 或 /home/xxx 的家目录）
-		if !strings.HasPrefix(home, "/data") {
-			targetDir = filepath.Join(home, ".goout", "bin")
+	if cache, err := os.UserCacheDir(); err == nil && cache != "" && cache != "/" {
+		if strings.HasPrefix(cache, "/data") {
+			pkgDir := filepath.Dir(cache)
+			candidates = append(candidates, filepath.Join(append([]string{pkgDir, "files"}, subPath...)...))
+		}
+		candidates = append(candidates, filepath.Join(append([]string{cache}, subPath...)...))
+	}
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" && home != "/" {
+		if strings.HasPrefix(home, "/data") {
+			pkgDir := home
+			if filepath.Base(home) == "cache" {
+				pkgDir = filepath.Dir(home)
+			}
+			candidates = append(candidates, filepath.Join(append([]string{pkgDir, "files"}, subPath...)...))
+		} else {
+			candidates = append(candidates, filepath.Join(append([]string{home, ".goout"}, subPath...)...))
 		}
 	}
 
-	// 3. 创建目标目录（在 Android 的私有分区下，这里拥有绝对的读写权限）
+	if tmp := os.TempDir(); tmp != "" && tmp != "/" {
+		candidates = append(candidates, filepath.Join(append([]string{tmp, "goout"}, subPath...)...))
+	}
+
+	candidates = append(candidates, filepath.Join(append([]string{"goout"}, subPath...)...))
+
+	for _, dir := range candidates {
+		if err := os.MkdirAll(dir, 0700); err == nil {
+			testFile := filepath.Join(dir, ".write_test")
+			if err := os.WriteFile(testFile, []byte("test"), 0600); err == nil {
+				_ = os.Remove(testFile)
+				return dir
+			}
+		}
+	}
+
+	fallback := filepath.Join(append([]string{os.TempDir(), "goout"}, subPath...)...)
+	_ = os.MkdirAll(fallback, 0700)
+	return fallback
+}
+
+func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
+	targetDir := getWritableDir("bin")
+
+	// 3. 创建目标目录（在私有分区或临时目录下，拥有绝对的读写权限）
 	if err := os.MkdirAll(targetDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create target dir %s: %w", targetDir, err)
 	}

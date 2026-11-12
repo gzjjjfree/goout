@@ -13,7 +13,7 @@
 
 ## 3. Project Status & Current Progress
 - **Version Display**: Dynamically retrieves and displays app version via `fyne.CurrentApp().Metadata().Version` in [`ui/dashboard.go`](ui/dashboard.go:70), corresponding to GitHub release and Fyne build version.
-- **Android Execution Fix**: Extracted binary to app private **files** directory (`files/bin`) rather than `cache` directory to prevent `permission denied` (exit status 126) caused by Android `noexec` cache partition mount.
+- **Android Execution Fix**: Extracted binary to app private **files** directory (`files/bin`) rather than `cache` directory to prevent `permission denied` (exit status 126) caused by Android `noexec` cache partition mount. Implemented robust multi-candidate writable directory resolution (`getWritableDir`) with write-testing to prevent `read-only file system` errors (e.g., when `HOME` or user directory points to `/`).
 - **Default Configuration**: Embedded [`data/goout.json`](data/goout.json:1) via `go:embed` in [`data/config.go`](data/config.go:1) and automatically deployed it as the default v2ray configuration file in app storage.
 - **Shizuku Removal Verification**: Completely removed Shizuku, `su`, and external probing logic. (Note: Old logs showing fallback/Shizuku were due to running a pre-existing installed APK prior to recompilation).
 - **Unit Tests**: All unit tests (`core/process_test.go`, `data/config_test.go`) passed successfully.
