@@ -84,7 +84,7 @@ func getWritableDir(subPath ...string) string {
 	}
 
 	// 3. 最终硬编码兜底（确保 Android 手机上万无一失指向 files 目录）
-	androidFiles := filepath.Join("/data/user/0/com.gzjjjfree.goout/files", filepath.Join(subPath...))
+	androidFiles := filepath.Join("/data/user/0/com.gzjjjfree.goout/code_cache", filepath.Join(subPath...))
 	_ = os.MkdirAll(androidFiles, 0700)
 	return androidFiles
 }
