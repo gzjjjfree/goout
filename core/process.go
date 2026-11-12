@@ -57,52 +57,36 @@ func (pm *ProcessManager) GetLogs() []string {
 }
 
 func getWritableDir(subPath ...string) string {
-	candidates := []string{}
-
-	if cache, err := os.UserCacheDir(); err == nil && cache != "" && filepath.IsAbs(cache) {
-		if strings.HasPrefix(cache, "/data") {
-			pkgDir := filepath.Dir(cache)
-			if filepath.IsAbs(pkgDir) {
-				candidates = append(candidates, filepath.Join(append([]string{pkgDir, "files"}, subPath...)...))
-			}
+	// 1. 优先检查 Android 沙盒环境（通过 UserHomeDir 判断）
+	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(home, "/data") {
+		pkgDir := home
+		// 如果返回的正好是 cache 或 files 目录，向上取到应用沙盒的根目录 (例如 /data/user/0/com.gzjjjfree.goout)
+		if filepath.Base(home) == "cache" || filepath.Base(home) == "files" {
+			pkgDir = filepath.Dir(home)
 		}
-		candidates = append(candidates, filepath.Join(append([]string{cache}, subPath...)...))
-	}
 
-	if home, err := os.UserHomeDir(); err == nil && home != "" && filepath.IsAbs(home) {
-		if strings.HasPrefix(home, "/data") {
-			pkgDir := home
-			if filepath.Base(home) == "cache" {
-				pkgDir = filepath.Dir(home)
-			}
-			if filepath.IsAbs(pkgDir) {
-				candidates = append(candidates, filepath.Join(append([]string{pkgDir, "files"}, subPath...)...))
-			}
-		} else {
-			candidates = append(candidates, filepath.Join(append([]string{home, ".goout"}, subPath...)...))
+		// 【核心关键】在 Android 上，可执行文件必须放在 files 目录下！
+		// 绝对不能使用 cache，因为 cache 目录拥有 noexec 限制，会导致 permission denied。
+		filesDir := filepath.Join(pkgDir, "files")
+		target := filepath.Join(append([]string{filesDir}, subPath...)...)
+
+		if err := os.MkdirAll(target, 0700); err == nil {
+			return target
 		}
 	}
 
-	if tmp := os.TempDir(); tmp != "" && filepath.IsAbs(tmp) {
-		candidates = append(candidates, filepath.Join(append([]string{tmp, "goout"}, subPath...)...))
-	}
-
-	for _, dir := range candidates {
-		if dir == "" || dir == "/" || !filepath.IsAbs(dir) {
-			continue
-		}
-		if err := os.MkdirAll(dir, 0700); err == nil {
-			testFile := filepath.Join(dir, ".write_test")
-			if err := os.WriteFile(testFile, []byte("test"), 0600); err == nil {
-				_ = os.Remove(testFile)
-				return dir
-			}
+	// 2. 桌面端（Windows/macOS/Linux）本地测试的兼容兜底
+	if home, err := os.UserHomeDir(); err == nil && home != "" && !strings.HasPrefix(home, "/data") {
+		target := filepath.Join(append([]string{home, ".goout"}, subPath...)...)
+		if err := os.MkdirAll(target, 0700); err == nil {
+			return target
 		}
 	}
 
-	fallback := filepath.Join(append([]string{os.TempDir(), "goout"}, subPath...)...)
-	_ = os.MkdirAll(fallback, 0700)
-	return fallback
+	// 3. 最终硬编码兜底（确保 Android 手机上万无一失指向 files 目录）
+	androidFiles := filepath.Join("/data/user/0/com.gzjjjfree.goout/files", filepath.Join(subPath...))
+	_ = os.MkdirAll(androidFiles, 0700)
+	return androidFiles
 }
 
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
