@@ -80,6 +80,10 @@ func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
 		return "", fmt.Errorf("failed to write embedded v2ray binary to %s: %w", extractPath, err)
 	}
 
+	if err := os.Chmod(extractPath, 0755); err != nil {
+		return "", fmt.Errorf("failed to set executable permission on %s: %w", extractPath, err)
+	}
+
 	pm.addLog("Extracted v2ray binary to private storage: %s", extractPath)
 	return extractPath, nil
 }
