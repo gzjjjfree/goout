@@ -67,7 +67,7 @@ func getWritableDir(subPath ...string) string {
 
 		// 【核心关键】在 Android 上，可执行文件必须放在 files 目录下！
 		// 绝对不能使用 cache，因为 cache 目录拥有 noexec 限制，会导致 permission denied。
-		filesDir := filepath.Join(pkgDir, "files")
+		filesDir := filepath.Join(pkgDir, "code_cache")
 		target := filepath.Join(append([]string{filesDir}, subPath...)...)
 
 		if err := os.MkdirAll(target, 0700); err == nil {
