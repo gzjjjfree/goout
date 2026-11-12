@@ -67,8 +67,15 @@ func SetupDashboard(w fyne.Window) {
 		showSettingsDialog(w, cfg)
 	})
 
+	appVersion := "1.0.0"
+	if app := fyne.CurrentApp(); app != nil {
+		if ver := app.Metadata().Version; ver != "" {
+			appVersion = ver
+		}
+	}
+
 	topContent := container.NewVBox(
-		widget.NewLabelWithStyle("GoOut Control Panel v1.0.0", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle(fmt.Sprintf("GoOut Control Panel v%s", appVersion), fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		statusLabel,
 		container.NewHBox(toggleBtn, configBtn),
 		widget.NewSeparator(),
