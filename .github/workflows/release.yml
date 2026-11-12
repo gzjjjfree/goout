@@ -45,7 +45,7 @@ jobs:
           K_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           K_ALIAS: "goout-alias"
         run: |
-          # 1. 确定版本号：优先使用手动触发输入 -> 其次使用 Git Tag -> 最后通过 git describe 自动推导
+          # 1. 确定版本号
           if [ -n "${{ github.event.inputs.version }}" ]; then
             RAW_VERSION="${{ github.event.inputs.version }}"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
@@ -59,7 +59,6 @@ jobs:
             CLEAN_VERSION="1.0.0"
           fi
 
-          # Android versionCode 必须为整数，使用 git 提交总数作为自增构建号（或 fallback 到 github.run_number）
           BUILD_ID=$(git rev-list --count HEAD 2>/dev/null || echo "${{ github.run_number }}")
           if [ -z "$BUILD_ID" ] || ! [[ "$BUILD_ID" =~ ^[0-9]+$ ]]; then
             BUILD_ID="${{ github.run_number }}"
@@ -68,37 +67,23 @@ jobs:
           echo "Final App Version: $CLEAN_VERSION"
           echo "Final Build ID (VersionCode): $BUILD_ID"
 
-          # 同步更新 FyneApp.toml 中的版本号和构建号（单行跨平台 Python 脚本）
           python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); c=re.sub(r"^version\s*=.*", f"version = \"{sys.argv[1]}\"", c, flags=re.M); c=re.sub(r"^build\s*=.*", f"build = {sys.argv[2]}", c, flags=re.M); open(f,"w").write(c)' "$CLEAN_VERSION" "$BUILD_ID"
 
-          # 2. 手动下载 bundletool (Google 官方)
+          # 2. 手动下载 bundletool
           BT_VERSION="1.17.0"
           curl -L -o bundletool.jar https://github.com/google/bundletool/releases/download/${BT_VERSION}/bundletool-all-${BT_VERSION}.jar
 
-          # 3. 创建一个命令脚本，让 fyne 能够通过 "bundletool" 这个名字调用它
           printf "#!/bin/bash\njava -jar $(pwd)/bundletool.jar \"\$@\"" > bundletool
           chmod +x bundletool
           export PATH=$PATH:$(pwd)
 
-          # 验证 bundletool 是否可用
-          ./bundletool version
-
-          # 4. 还原 Keystore
+          # 3. 还原 Keystore
           echo "$K_BASE64" | base64 -d > release.keystore
 
           export ANDROID_HOME=$ANDROID_SDK_ROOT
           export ANDROID_NDK_HOME=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
 
-          # 确保将自定义的 android 目录和 jniLibs 复制到 Fyne 打包可能识别的路径
-          # 实际上，Fyne 默认会在当前目录寻找 android 目录。
-          # 但为了防止 Fyne 内部构建时清理或覆盖，我们可以在执行前检查确认：
-          if [ -d "android/app/src/main/jniLibs" ]; then
-            echo "jniLibs directory exists in source tree."
-          else
-            echo "Warning: jniLibs missing!"
-          fi
-
-          # 5. 使用 release 命令进行正式打包
+          # 4. 使用 release 命令进行正式打包（此时会生成 GoOut.aab）
           fyne release -os android/arm64 \
             -appID com.gzjjjfree.goout \
             -icon Icon.png \
@@ -110,7 +95,34 @@ jobs:
             -keyName "$K_ALIAS" \
             -name GoOut
 
-          # 使用 bundletool 生成包含通用 APK 的 apks 压缩包
+          # ==========================================
+          # 【核心新增】将 libv2ray.so 动态注入到生成的 AAB 中
+          # ==========================================
+          echo "Injecting libv2ray.so into GoOut.aab..."
+
+          # AAB 的内部结构中，原生库应存放在 root/jni/arm64-v8a/libv2ray.so
+          # 我们先创建一个临时目录结构
+          mkdir -p inject_temp/jni/arm64-v8a
+
+          # 确保你的 libv2ray.so 位于正确的仓库路径下（例如 android/app/src/main/jniLibs/arm64-v8a/libv2ray.so）
+          if [ -f "android/app/src/main/jniLibs/arm64-v8a/libv2ray.so" ]; then
+            cp android/app/src/main/jniLibs/arm64-v8a/libv2ray.so inject_temp/jni/arm64-v8a/
+          elif [ -f "core/bin/libv2ray.so" ]; then
+            cp core/bin/libv2ray.so inject_temp/jni/arm64-v8a/
+          else
+            echo "Error: libv2ray.so not found in source tree!"
+            exit 1
+          fi
+
+          # 将该动态库追加进 GoOut.aab 压缩包中
+          cd inject_temp
+          zip -r ../GoOut.aab jni/
+          cd ..
+          rm -rf inject_temp
+          echo "Successfully injected libv2ray.so into GoOut.aab!"
+          # ==========================================
+
+          # 5. 使用 bundletool 生成包含通用 APK 的 apks 压缩包
           ./bundletool build-apks --bundle=GoOut.aab --output=GoOut.apks --mode=universal --ks=release.keystore --ks-pass=pass:"$K_PASS" --ks-key-alias="$K_ALIAS" --key-pass=pass:"$K_PASS"
 
           # 从 .apks 中提取出真正的 .apk 文件
@@ -119,7 +131,6 @@ jobs:
           echo "Success! GoOut_Native.apk has been generated."
 
           mv GoOut.aab GoOut_Native.aab
-
           echo "Success! Native artifacts renamed."
 
       - name: Upload Android APK
