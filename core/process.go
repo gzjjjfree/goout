@@ -2,12 +2,14 @@ package core
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -52,33 +54,67 @@ func (pm *ProcessManager) GetLogs() []string {
 }
 
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
-	// 纯 jniLibs 方案：严格从系统的 nativeLibraryDir 读取 libv2ray.so，绝不进行运行时文件写入
 	var candidatePaths []string
 
+	// 1. 核心方法：通过当前正在运行的可执行文件/动态库路径推导同级目录
+	if execPath, err := os.Executable(); err == nil && execPath != "" {
+		execDir := filepath.Dir(execPath)
+		candidatePaths = append(candidatePaths, filepath.Join(execDir, "libv2ray.so"))
+		candidatePaths = append(candidatePaths, filepath.Join(filepath.Dir(execDir), "libv2ray.so"))
+		candidatePaths = append(candidatePaths, filepath.Join(filepath.Dir(execDir), "arm64", "libv2ray.so"))
+	}
+
+	// 2. 备用方法：通过解析 /proc/self/maps 内存映射查找已加载的库路径
+	if mapsData, err := os.ReadFile("/proc/self/maps"); err == nil {
+		scanner := bufio.NewScanner(bytes.NewReader(mapsData))
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.Contains(line, "libv2ray.so") || strings.Contains(line, "libmain.so") || strings.Contains(line, "libapp.so") {
+				fields := strings.Fields(line)
+				if len(fields) > 0 {
+					path := fields[len(fields)-1]
+					if strings.HasPrefix(path, "/") {
+						dir := filepath.Dir(path)
+						candidatePaths = append(candidatePaths, filepath.Join(dir, "libv2ray.so"))
+					}
+				}
+			}
+		}
+	}
+
+	// 3. 补充常见的 Android 绝对沙盒路径兜底
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		pkgDir := home
 		base := filepath.Base(home)
 		if base == "cache" || base == "files" || base == "code_cache" {
 			pkgDir = filepath.Dir(home)
 		}
-		candidatePaths = append(candidatePaths, filepath.Join(pkgDir, "lib", "libv2ray.so"))
+		candidatePaths = append(candidatePaths,
+			filepath.Join(pkgDir, "lib", "libv2ray.so"),
+			filepath.Join(pkgDir, "lib", "arm64", "libv2ray.so"),
+			filepath.Join(pkgDir, "lib", "arm64-v8a", "libv2ray.so"),
+		)
 	}
 
-	// 添加标准的 Android 绝对路径兜底（非运行时写入，而是系统解压的目标位置）
 	candidatePaths = append(candidatePaths,
 		"/data/user/0/com.gzjjjfree.goout/lib/libv2ray.so",
 		"/data/data/com.gzjjjfree.goout/lib/libv2ray.so",
 	)
 
-	// 遍历查找系统已经解压好的 .so 文件
+	// 遍历候选路径并进行精确校验
+	seen := make(map[string]bool)
 	for _, path := range candidatePaths {
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			pm.addLog("Found native library via jniLibs at: %s", path)
+			pm.addLog("Found native library dynamically at: %s", path)
 			return path, nil
 		}
 	}
 
-	return "", fmt.Errorf("native library libv2ray.so not found in jniLibs. Ensure it is placed in app/src/main/jniLibs/arm64-v8a/ and android:extractNativeLibs='true'")
+	return "", fmt.Errorf("native library libv2ray.so not found. Ensure it is placed in app/src/main/jniLibs/arm64-v8a/ and android:extractNativeLibs='true'")
 }
 
 func (pm *ProcessManager) Start(configPath string) error {
