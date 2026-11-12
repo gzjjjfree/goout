@@ -1,0 +1,114 @@
+{
+    "log": {
+        "loglevel": "none"
+    },
+    "inbounds": [
+        {
+            "tag": "gz",
+            "port": 10818,
+            "listen": "127.0.0.1",
+            "protocol": "socks",
+            "sniffing": {
+                "enabled": true,
+                "destOverride": [
+                    "http",
+                    "tls"
+                ],
+                "metadataOnly": false
+            },
+            "settings": {
+                "auth": "noauth",
+                "udp": true,
+                "ip": null,
+                "address": null,
+                "clients": null
+            },
+            "streamSettings": null
+        }
+    ],
+    "outbounds": [
+        {
+            "tag": "cdn-proxy",
+            "protocol": "vless",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": "104.18.86.206",
+                        "port": 443,
+                        "users": [
+                            {
+                                "id": "",
+                                "encryption": "none"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "tls",
+                "tlsSettings": {
+                    "serverName": "",
+                    "echDohServer": "",
+                    "allowInsecure": false
+                },
+                "wsSettings": {
+                    "path": "/ws",
+                    "headers": {
+                        "Host": "",
+                        "User-Agent": ""
+                    }
+                }
+            },
+            "mux": {
+                "enabled": true,
+                "concurrency": 4
+            }
+        },
+        {
+            "protocol": "freedom",
+            "tag": "direct",
+            "settings": {
+                "domainStrategy": "UseIP"
+            }
+        },
+        {
+            "protocol": "blackhole",
+            "tag": "adblock"
+        }
+    ],
+    "stats": null,
+    "routing": {
+        "domainStrategy": "AsIs",
+        "domainMatcher": "mph",
+        "rules": [
+            {
+                "type": "field",
+                "balancerTag": "cdn-balancer-proxy",
+                "domain": [
+                    "geosite:geolocation-!cn"
+                ],
+                "inboundTag": [
+                    "gz"
+                ]
+            },
+            {
+                "type": "field",
+                "outboundTag": "direct",
+                "inboundTag": [
+                    "gz"
+                ]
+            },
+            {
+                "type": "field",
+                "outboundTag": "adblock",
+                "domain": [
+                    "domain:algolia.net",
+                    "geosite:category-ads-all"
+                ]
+            }
+        ]
+    },
+    "reverse": null,
+    "transport": null
+}
