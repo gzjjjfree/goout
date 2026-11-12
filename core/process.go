@@ -2,14 +2,12 @@ package core
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
@@ -54,67 +52,47 @@ func (pm *ProcessManager) GetLogs() []string {
 }
 
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
-	var candidatePaths []string
+	// 定义所有可能的路径通配符模式（兼容 Android 各种版本的随机哈希目录与架构子目录）
+	patterns := []string{
+		// 1. 动态安装路径模糊匹配 (/data/app/~~.../lib/arm64/libv2ray.so)
+		"/data/app/*/com.gzjjjfree.goout*/lib/*/libv2ray.so",
+		"/data/app/*/com.gzjjjfree.goout*/lib/libv2ray.so",
 
-	// 1. 核心方法：通过当前正在运行的可执行文件/动态库路径推导同级目录
-	if execPath, err := os.Executable(); err == nil && execPath != "" {
-		execDir := filepath.Dir(execPath)
-		candidatePaths = append(candidatePaths, filepath.Join(execDir, "libv2ray.so"))
-		candidatePaths = append(candidatePaths, filepath.Join(filepath.Dir(execDir), "libv2ray.so"))
-		candidatePaths = append(candidatePaths, filepath.Join(filepath.Dir(execDir), "arm64", "libv2ray.so"))
+		// 2. 经典沙盒私有路径匹配
+		"/data/user/0/com.gzjjjfree.goout/lib/*/libv2ray.so",
+		"/data/user/0/com.gzjjjfree.goout/lib/libv2ray.so",
+		"/data/data/com.gzjjjfree.goout/lib/*/libv2ray.so",
+		"/data/data/com.gzjjjfree.goout/lib/libv2ray.so",
 	}
 
-	// 2. 备用方法：通过解析 /proc/self/maps 内存映射查找已加载的库路径
-	if mapsData, err := os.ReadFile("/proc/self/maps"); err == nil {
-		scanner := bufio.NewScanner(bytes.NewReader(mapsData))
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.Contains(line, "libv2ray.so") || strings.Contains(line, "libmain.so") || strings.Contains(line, "libapp.so") {
-				fields := strings.Fields(line)
-				if len(fields) > 0 {
-					path := fields[len(fields)-1]
-					if strings.HasPrefix(path, "/") {
-						dir := filepath.Dir(path)
-						candidatePaths = append(candidatePaths, filepath.Join(dir, "libv2ray.so"))
-					}
-				}
-			}
-		}
-	}
-
-	// 3. 补充常见的 Android 绝对沙盒路径兜底
+	// 如果通过 UserHomeDir 能获取到当前用户的私有目录，也加入通配符
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		pkgDir := home
 		base := filepath.Base(home)
 		if base == "cache" || base == "files" || base == "code_cache" {
 			pkgDir = filepath.Dir(home)
 		}
-		candidatePaths = append(candidatePaths,
+		patterns = append(patterns,
+			filepath.Join(pkgDir, "lib", "*", "libv2ray.so"),
 			filepath.Join(pkgDir, "lib", "libv2ray.so"),
-			filepath.Join(pkgDir, "lib", "arm64", "libv2ray.so"),
-			filepath.Join(pkgDir, "lib", "arm64-v8a", "libv2ray.so"),
 		)
 	}
 
-	candidatePaths = append(candidatePaths,
-		"/data/user/0/com.gzjjjfree.goout/lib/libv2ray.so",
-		"/data/data/com.gzjjjfree.goout/lib/libv2ray.so",
-	)
-
-	// 遍历候选路径并进行精确校验
-	seen := make(map[string]bool)
-	for _, path := range candidatePaths {
-		if path == "" || seen[path] {
+	// 遍历所有模式进行 Glob 匹配
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
 			continue
 		}
-		seen[path] = true
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			pm.addLog("Found native library dynamically at: %s", path)
-			return path, nil
+		for _, path := range matches {
+			if info, err := os.Stat(path); err == nil && !info.IsDir() {
+				pm.addLog("Found native library via glob at: %s", path)
+				return path, nil
+			}
 		}
 	}
 
-	return "", fmt.Errorf("native library libv2ray.so not found. Ensure it is placed in app/src/main/jniLibs/arm64-v8a/ and android:extractNativeLibs='true'")
+	return "", fmt.Errorf("libv2ray.so not found via glob. Check if jniLibs is packaged correctly")
 }
 
 func (pm *ProcessManager) Start(configPath string) error {
