@@ -58,33 +58,35 @@ func (pm *ProcessManager) GetLogs() []string {
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil || homeDir == "" {
-		homeDir = os.TempDir()
+		return "", fmt.Errorf("failed to get user home dir: %w", err)
 	}
+
 	var targetDir string
 	if filepath.Base(homeDir) == "cache" {
 		targetDir = filepath.Join(filepath.Dir(homeDir), "files", "bin")
 	} else {
 		targetDir = filepath.Join(homeDir, "files", "bin")
-		if _, err := os.Stat(filepath.Join(homeDir, "files")); os.IsNotExist(err) {
-			targetDir = filepath.Join(homeDir, "goout", "bin")
-		}
 	}
 
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		targetDir = filepath.Join(os.TempDir(), "goout", "bin")
-		_ = os.MkdirAll(targetDir, 0755)
+	if err := os.MkdirAll(targetDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create target dir: %w", err)
 	}
 
 	extractPath := filepath.Join(targetDir, "v2ray")
-	if err := os.WriteFile(extractPath, v2rayBinary, 0755); err != nil {
-		return "", fmt.Errorf("failed to write embedded v2ray binary to %s: %w", extractPath, err)
+	if err := os.WriteFile(extractPath, v2rayBinary, 0700); err != nil {
+		return "", fmt.Errorf("failed to write v2ray binary: %w", err)
 	}
 
-	if err := os.Chmod(extractPath, 0755); err != nil {
-		return "", fmt.Errorf("failed to set executable permission on %s: %w", extractPath, err)
+	if err := os.Chmod(extractPath, 0700); err != nil {
+		return "", fmt.Errorf("failed to set executable permission: %w", err)
 	}
 
-	pm.addLog("Extracted v2ray binary to private storage: %s", extractPath)
+	info, err := os.Stat(extractPath)
+	if err != nil || info.Mode()&0100 == 0 {
+		return "", fmt.Errorf("binary is not executable: %w", err)
+	}
+
+	pm.addLog("Extracted v2ray binary successfully to: %s", extractPath)
 	return extractPath, nil
 }
 
