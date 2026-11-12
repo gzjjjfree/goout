@@ -57,40 +57,39 @@ func (pm *ProcessManager) GetLogs() []string {
 }
 
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil || homeDir == "" || strings.HasPrefix(homeDir, "/sdcard") {
-		homeDir = "."
+	// 在 Android 上，直接通过应用的私有缓存目录（CacheDir）或文件目录（FilesDir）获取绝对路径
+	// 如果没有集成 mobile 包，我们可以利用 os.TempDir() 或者通过工作目录来推导私有路径
+	// 但最稳妥的做法是直接指定你的应用包名对应的绝对私有路径：/data/user/0/com.gzjjjfree.goout/cache/
+
+	baseDir := "/data/user/0/com.gzjjjfree.goout/cache"
+
+	// 如果你在其他平台（如电脑测试），可以用 os.UserHomeDir() 做兼容兜底
+	if home, err := os.UserHomeDir(); err == nil && home != "" && !strings.Contains(home, "app") {
+		baseDir = filepath.Join(home, "cache")
 	}
 
-	var targetDir string
-	if strings.Contains(homeDir, "cache") {
-		targetDir = filepath.Join(filepath.Dir(homeDir), "files", "bin")
-	} else if strings.Contains(homeDir, "files") {
-		targetDir = filepath.Join(homeDir, "bin")
-	} else {
-		targetDir = filepath.Join(homeDir, "files", "bin")
-	}
+	targetDir := filepath.Join(baseDir, "goout", "bin")
 
-	if strings.HasPrefix(targetDir, "/sdcard") || strings.HasPrefix(targetDir, "/storage") {
-		targetDir = "/data/user/0/com.gzjjjfree.goout/files/bin"
-	}
-
+	// 1. 创建目标目录（此时在私有 cache 目录下，拥有完全的读写权限）
 	if err := os.MkdirAll(targetDir, 0700); err != nil {
-		return "", fmt.Errorf("failed to create target dir %s: %w", targetDir, err)
+		return "", fmt.Errorf("failed to create target dir: %w", err)
 	}
 
 	extractPath := filepath.Join(targetDir, "v2ray")
+
+	// 2. 写入二进制文件
 	if err := os.WriteFile(extractPath, v2rayBinary, 0700); err != nil {
-		return "", fmt.Errorf("failed to write v2ray binary to %s: %w", extractPath, err)
+		return "", fmt.Errorf("failed to write binary: %w", err)
 	}
 
+	// 3. 显式赋予可执行权限
 	if err := os.Chmod(extractPath, 0700); err != nil {
-		return "", fmt.Errorf("failed to set executable permission on %s: %w", extractPath, err)
+		return "", fmt.Errorf("failed to set permission: %w", err)
 	}
 
-	info, err := os.Stat(extractPath)
-	if err != nil || info.Mode()&0100 == 0 {
-		return "", fmt.Errorf("binary is not executable: %w", err)
+	// *Verification:* 验证文件是否写入成功且具备可执行权限
+	if info, err := os.Stat(extractPath); err != nil || info.Mode()&0100 == 0 {
+		return "", fmt.Errorf("binary is not ready or executable")
 	}
 
 	pm.addLog("Extracted v2ray binary to private storage: %s", extractPath)

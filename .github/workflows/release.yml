@@ -5,6 +5,11 @@ on:
     tags:
       - "v*" # 当推送 v1.0.0 等标签时触发
   workflow_dispatch: # 手动触发
+    inputs:
+      version:
+        description: 'App Version (e.g. 1.0.10, leave empty to auto-detect)'
+        required: false
+        type: string
 
 # 强制赋予当前工作流的 GITHUB_TOKEN 写入 Release 的权限
 permissions:
@@ -38,12 +43,34 @@ jobs:
           K_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           K_ALIAS: "goout-alias"
         run: |
-          RAW_VERSION=${GITHUB_REF#refs/tags/}          
-          # 1. 手动下载 bundletool (Google 官方)
+          # 1. 确定版本号：优先使用手动触发输入 -> 其次使用 Git Tag -> 最后通过 git describe 自动推导
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            RAW_VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            RAW_VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            RAW_VERSION=$(git describe --tags --always 2>/dev/null || echo "1.0.0")
+          fi
+
+          CLEAN_VERSION=$(echo "$RAW_VERSION" | sed 's/^v//' | sed 's/-.*//')
+          if [ -z "$CLEAN_VERSION" ] || ! [[ "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then
+            CLEAN_VERSION="1.0.0"
+          fi
+          
+          # Android versionCode 必须为整数，使用 git 提交总数作为自增构建号（或 fallback 到 github.run_number）
+          BUILD_ID=$(git rev-list --count HEAD 2>/dev/null || echo "${{ github.run_number }}")
+          if [ -z "$BUILD_ID" ] || ! [[ "$BUILD_ID" =~ ^[0-9]+$ ]]; then
+            BUILD_ID="${{ github.run_number }}"
+          fi
+
+          echo "Final App Version: $CLEAN_VERSION"
+          echo "Final Build ID (VersionCode): $BUILD_ID"
+
+          # 2. 手动下载 bundletool (Google 官方)
           BT_VERSION="1.17.0"
           curl -L -o bundletool.jar https://github.com/google/bundletool/releases/download/${BT_VERSION}/bundletool-all-${BT_VERSION}.jar
 
-          # 2. 创建一个命令脚本，让 fyne 能够通过 "bundletool" 这个名字调用它
+          # 3. 创建一个命令脚本，让 fyne 能够通过 "bundletool" 这个名字调用它
           printf "#!/bin/bash\njava -jar $(pwd)/bundletool.jar \"\$@\"" > bundletool
           chmod +x bundletool
           export PATH=$PATH:$(pwd)
@@ -51,24 +78,13 @@ jobs:
           # 验证 bundletool 是否可用
           ./bundletool version
 
-          # 3. 还原 Keystore
+          # 4. 还原 Keystore
           echo "$K_BASE64" | base64 -d > release.keystore
-
-          if [[ $RAW_VERSION =~ ^v?[0-9] ]]; then
-            CLEAN_VERSION=$(echo $RAW_VERSION | sed 's/^v//')
-          else
-            CLEAN_VERSION="1.0.0"
-          fi
-          
-          BUILD_ID=${{ github.run_number }}
-
-          echo "Final App Version: $CLEAN_VERSION"
-          echo "Final Build ID: $BUILD_ID"
 
           export ANDROID_HOME=$ANDROID_SDK_ROOT
           export ANDROID_NDK_HOME=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
 
-          # 4. 使用 release 命令进行正式打包
+          # 5. 使用 release 命令进行正式打包
           fyne release -os android/arm64 \
             -appID com.gzjjjfree.goout \
             -icon Icon.png \
@@ -116,12 +132,19 @@ jobs:
 
       - name: Build macOS (ARM64)
         run: |
-          RAW_VERSION=${GITHUB_REF#refs/tags/}
-          if [[ $RAW_VERSION =~ ^v?[0-9] ]]; then
-            CLEAN_VERSION=$(echo $RAW_VERSION | sed 's/^v//')
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            RAW_VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            RAW_VERSION="${GITHUB_REF#refs/tags/}"
           else
+            RAW_VERSION=$(git describe --tags --always 2>/dev/null || echo "1.0.0")
+          fi
+
+          CLEAN_VERSION=$(echo "$RAW_VERSION" | sed 's/^v//' | sed 's/-.*//')
+          if [ -z "$CLEAN_VERSION" ] || ! [[ "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then
             CLEAN_VERSION="1.0.0"
           fi
+
           echo "Final App Version: $CLEAN_VERSION"
 
           fyne package -os darwin -name GoOut -icon Icon.png --appVersion "$CLEAN_VERSION"

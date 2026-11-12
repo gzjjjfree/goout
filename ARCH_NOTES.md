@@ -17,3 +17,4 @@
 - **Default Configuration**: Embedded [`data/goout.json`](data/goout.json:1) via `go:embed` in [`data/config.go`](data/config.go:1) and automatically deployed it as the default v2ray configuration file in app storage.
 - **Shizuku Removal Verification**: Completely removed Shizuku, `su`, and external probing logic. (Note: Old logs showing fallback/Shizuku were due to running a pre-existing installed APK prior to recompilation).
 - **Unit Tests**: All unit tests (`core/process_test.go`, `data/config_test.go`) passed successfully.
+- **CI/CD Versioning (`.github/workflows/release.yml`)**: Enhanced GitHub Actions workflow to support manual version input (`workflow_dispatch`), git tag detection (`refs/tags/v*`), `git describe` fallback, and dynamic monotonic `appBuild` (`versionCode`) generation using `git rev-list --count HEAD`.
