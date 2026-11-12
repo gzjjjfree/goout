@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -57,28 +58,34 @@ func (pm *ProcessManager) GetLogs() []string {
 
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
 	homeDir, err := os.UserHomeDir()
-	if err != nil || homeDir == "" {
-		return "", fmt.Errorf("failed to get user home dir: %w", err)
+	if err != nil || homeDir == "" || strings.HasPrefix(homeDir, "/sdcard") {
+		homeDir = "."
 	}
 
 	var targetDir string
-	if filepath.Base(homeDir) == "cache" {
+	if strings.Contains(homeDir, "cache") {
 		targetDir = filepath.Join(filepath.Dir(homeDir), "files", "bin")
+	} else if strings.Contains(homeDir, "files") {
+		targetDir = filepath.Join(homeDir, "bin")
 	} else {
 		targetDir = filepath.Join(homeDir, "files", "bin")
 	}
 
+	if strings.HasPrefix(targetDir, "/sdcard") || strings.HasPrefix(targetDir, "/storage") {
+		targetDir = "/data/user/0/com.gzjjjfree.goout/files/bin"
+	}
+
 	if err := os.MkdirAll(targetDir, 0700); err != nil {
-		return "", fmt.Errorf("failed to create target dir: %w", err)
+		return "", fmt.Errorf("failed to create target dir %s: %w", targetDir, err)
 	}
 
 	extractPath := filepath.Join(targetDir, "v2ray")
 	if err := os.WriteFile(extractPath, v2rayBinary, 0700); err != nil {
-		return "", fmt.Errorf("failed to write v2ray binary: %w", err)
+		return "", fmt.Errorf("failed to write v2ray binary to %s: %w", extractPath, err)
 	}
 
 	if err := os.Chmod(extractPath, 0700); err != nil {
-		return "", fmt.Errorf("failed to set executable permission: %w", err)
+		return "", fmt.Errorf("failed to set executable permission on %s: %w", extractPath, err)
 	}
 
 	info, err := os.Stat(extractPath)
@@ -86,7 +93,7 @@ func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
 		return "", fmt.Errorf("binary is not executable: %w", err)
 	}
 
-	pm.addLog("Extracted v2ray binary successfully to: %s", extractPath)
+	pm.addLog("Extracted v2ray binary to private storage: %s", extractPath)
 	return extractPath, nil
 }
 

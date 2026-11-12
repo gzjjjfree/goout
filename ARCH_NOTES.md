@@ -2,7 +2,7 @@
 
 ## 1. Core Architecture & Module Design
 - **Entry Point**: [`main.go`](main.go:1) initializes Fyne app and calls [`ui.SetupDashboard`](ui/dashboard.go:1).
-- **Process Management (`core/process.go`)**: Manages subprocesses (v2ray) by extracting embedded binaries (`v2ray`) directly to application private **files** storage (`/data/user/0/<pkg>/files/bin`), enforcing `0700` permissions via `os.Chmod`, and verifying executable status (`info.Mode() & 0100`) to completely prevent Android `noexec` cache partition permission denied errors.
+- **Process Management (`core/process.go`)**: Manages subprocesses (v2ray) by extracting embedded binaries (`v2ray`) directly to application private **files** storage (`/data/user/0/<pkg>/files/bin`), enforcing `/sdcard` and external storage protection checks, setting `0700` permissions via `os.Chmod`, and verifying executable status (`info.Mode() & 0100`) to completely prevent Android `noexec` and permission denied errors.
 - **VPN Redirection (`service/vpn.go`)**: Manages Android `VpnService` permissions, TUN interfaces (`10.0.0.2`), and `0.0.0.0/0` traffic routing using pure Go packet processing.
 - **Pure Go Network Stack (`jni/tun2socks.go` & `jni/tun2socks_stub.go`)**: Pure Go packet forwarding / SOCKS proxy tunnel implementation, eliminating CGO dependencies and simplifying cross-compilation.
 - **Configuration (`data/config.go`)**: JSON serialization/deserialization for server settings, SOCKS port, TUN IP, and subscription management. Defaults to embedding and deploying [`data/goout.json`](data/goout.json:1) into app private files storage.
