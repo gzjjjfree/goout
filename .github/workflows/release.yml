@@ -66,6 +66,10 @@ jobs:
           echo "Final App Version: $CLEAN_VERSION"
           echo "Final Build ID (VersionCode): $BUILD_ID"
 
+          # 同步更新 FyneApp.toml 中的版本号和构建号，确保 Fyne 编译时正确打包该版本
+          sed -i 's/^version = .*/version = "'$CLEAN_VERSION'"/' FyneApp.toml
+          sed -i 's/^build = .*/build = '$BUILD_ID'/' FyneApp.toml
+
           # 2. 手动下载 bundletool (Google 官方)
           BT_VERSION="1.17.0"
           curl -L -o bundletool.jar https://github.com/google/bundletool/releases/download/${BT_VERSION}/bundletool-all-${BT_VERSION}.jar
@@ -146,6 +150,9 @@ jobs:
           fi
 
           echo "Final App Version: $CLEAN_VERSION"
+
+          # 同步更新 FyneApp.toml 中的版本号
+          sed -i 's/^version = .*/version = "'$CLEAN_VERSION'"/' FyneApp.toml
 
           fyne package -os darwin -name GoOut -icon Icon.png --appVersion "$CLEAN_VERSION"
           zip -r GoOut_macOS_arm64.zip GoOut.app

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 //go:embed goout.json
@@ -20,21 +21,52 @@ type Config struct {
 	RoutingBypass   []string `json:"routing_bypass"`
 }
 
-func DefaultConfig() *Config {
-	homeDir, err := os.UserHomeDir()
-	if err != nil || homeDir == "" {
-		homeDir = os.TempDir()
+func getWritableDir(subPath ...string) string {
+	candidates := []string{}
+
+	if cache, err := os.UserCacheDir(); err == nil && cache != "" && cache != "/" {
+		if strings.HasPrefix(cache, "/data") {
+			pkgDir := filepath.Dir(cache)
+			candidates = append(candidates, filepath.Join(append([]string{pkgDir, "files"}, subPath...)...))
+		}
+		candidates = append(candidates, filepath.Join(append([]string{cache}, subPath...)...))
 	}
-	var configDir string
-	if filepath.Base(homeDir) == "cache" {
-		configDir = filepath.Join(filepath.Dir(homeDir), "files")
-	} else {
-		configDir = filepath.Join(homeDir, "files")
-		if _, err := os.Stat(configDir); os.IsNotExist(err) {
-			configDir = filepath.Join(homeDir, "goout")
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" && home != "/" {
+		if strings.HasPrefix(home, "/data") {
+			pkgDir := home
+			if filepath.Base(home) == "cache" {
+				pkgDir = filepath.Dir(home)
+			}
+			candidates = append(candidates, filepath.Join(append([]string{pkgDir, "files"}, subPath...)...))
+		} else {
+			candidates = append(candidates, filepath.Join(append([]string{home, ".goout"}, subPath...)...))
 		}
 	}
-	_ = os.MkdirAll(configDir, 0755)
+
+	if tmp := os.TempDir(); tmp != "" && tmp != "/" {
+		candidates = append(candidates, filepath.Join(append([]string{tmp, "goout"}, subPath...)...))
+	}
+
+	candidates = append(candidates, filepath.Join(append([]string{"goout"}, subPath...)...))
+
+	for _, dir := range candidates {
+		if err := os.MkdirAll(dir, 0700); err == nil {
+			testFile := filepath.Join(dir, ".write_test")
+			if err := os.WriteFile(testFile, []byte("test"), 0600); err == nil {
+				_ = os.Remove(testFile)
+				return dir
+			}
+		}
+	}
+
+	fallback := filepath.Join(append([]string{os.TempDir(), "goout"}, subPath...)...)
+	_ = os.MkdirAll(fallback, 0700)
+	return fallback
+}
+
+func DefaultConfig() *Config {
+	configDir := getWritableDir()
 	configPath := filepath.Join(configDir, "goout.json")
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
