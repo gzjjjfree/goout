@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # 手动触发
     inputs:
       version:
-        description: 'App Version (e.g. 1.0.10, leave empty to auto-detect)'
+        description: "App Version (e.g. 1.0.10, leave empty to auto-detect)"
         required: false
         type: string
 
@@ -58,7 +58,7 @@ jobs:
           if [ -z "$CLEAN_VERSION" ] || ! [[ "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then
             CLEAN_VERSION="1.0.0"
           fi
-          
+
           # Android versionCode 必须为整数，使用 git 提交总数作为自增构建号（或 fallback 到 github.run_number）
           BUILD_ID=$(git rev-list --count HEAD 2>/dev/null || echo "${{ github.run_number }}")
           if [ -z "$BUILD_ID" ] || ! [[ "$BUILD_ID" =~ ^[0-9]+$ ]]; then
@@ -88,6 +88,15 @@ jobs:
 
           export ANDROID_HOME=$ANDROID_SDK_ROOT
           export ANDROID_NDK_HOME=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
+
+          # 确保将自定义的 android 目录和 jniLibs 复制到 Fyne 打包可能识别的路径
+          # 实际上，Fyne 默认会在当前目录寻找 android 目录。
+          # 但为了防止 Fyne 内部构建时清理或覆盖，我们可以在执行前检查确认：
+          if [ -d "android/app/src/main/jniLibs" ]; then
+            echo "jniLibs directory exists in source tree."
+          else
+            echo "Warning: jniLibs missing!"
+          fi
 
           # 5. 使用 release 命令进行正式打包
           fyne release -os android/arm64 \
