@@ -12,7 +12,7 @@
 - Followed Go, Android, Fyne, and non-root sandboxed process execution guidelines (v2rayNG model).
 
 ## 3. Project Status & Current Progress
-- **Version Display**: Added version number `v1.0.0` to the UI title in [`ui/dashboard.go`](ui/dashboard.go:71).
+- **Version Display**: Dynamically retrieves and displays app version via `fyne.CurrentApp().Metadata().Version` in [`ui/dashboard.go`](ui/dashboard.go:70), corresponding to GitHub release and Fyne build version.
 - **Android Execution Fix**: Extracted binary to app private **files** directory (`files/bin`) rather than `cache` directory to prevent `permission denied` (exit status 126) caused by Android `noexec` cache partition mount.
 - **Default Configuration**: Embedded [`data/goout.json`](data/goout.json:1) via `go:embed` in [`data/config.go`](data/config.go:1) and automatically deployed it as the default v2ray configuration file in app storage.
 - **Shizuku Removal Verification**: Completely removed Shizuku, `su`, and external probing logic. (Note: Old logs showing fallback/Shizuku were due to running a pre-existing installed APK prior to recompilation).
