@@ -1,10 +1,14 @@
 package data
 
 import (
+	_ "embed"
 	"encoding/json"
 	"os"
 	"path/filepath"
 )
+
+//go:embed goout.json
+var defaultConfigFile []byte
 
 type Config struct {
 	V2RayConfigPath string   `json:"v2ray_config_path"`
@@ -17,9 +21,29 @@ type Config struct {
 }
 
 func DefaultConfig() *Config {
+	homeDir, err := os.UserHomeDir()
+	if err != nil || homeDir == "" {
+		homeDir = os.TempDir()
+	}
+	var configDir string
+	if filepath.Base(homeDir) == "cache" {
+		configDir = filepath.Join(filepath.Dir(homeDir), "files")
+	} else {
+		configDir = filepath.Join(homeDir, "files")
+		if _, err := os.Stat(configDir); os.IsNotExist(err) {
+			configDir = filepath.Join(homeDir, "goout")
+		}
+	}
+	_ = os.MkdirAll(configDir, 0755)
+	configPath := filepath.Join(configDir, "goout.json")
+
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		_ = os.WriteFile(configPath, defaultConfigFile, 0644)
+	}
+
 	return &Config{
-		V2RayConfigPath: "/data/local/tmp/goout.json",
-		SocksPort:       10808,
+		V2RayConfigPath: configPath,
+		SocksPort:       10818,
 		TunIP:           "10.0.0.2",
 		ServerAddress:   "127.0.0.1",
 		ServerPort:      10809,
@@ -50,4 +74,3 @@ func SaveConfig(path string, cfg *Config) error {
 	}
 	return os.WriteFile(path, data, 0644)
 }
-

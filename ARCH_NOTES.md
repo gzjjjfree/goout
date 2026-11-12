@@ -2,21 +2,18 @@
 
 ## 1. Core Architecture & Module Design
 - **Entry Point**: [`main.go`](main.go:1) initializes Fyne app and calls [`ui.SetupDashboard`](ui/dashboard.go:1).
-- **Process Management (`core/process.go`)**: Manages subprocesses (v2ray) by attempting extraction to `/data/local/tmp/v2ray` directly or via Shizuku/shell commands (`sh`/`su`), with automatic graceful fallback to the user cache directory (`os.UserCacheDir()`) if permission is denied. Supports execution via direct process invocation or shell/Shizuku wrappers, utilizing context cancellation, thread-safe ring buffers (500 lines) for log streaming, and mutex locking.
+- **Process Management (`core/process.go`)**: Manages subprocesses (v2ray) by extracting embedded binaries (`v2ray`) directly to application private **files** storage (`/data/user/0/<pkg>/files/bin`) at runtime, granting executable permissions and running them as local sandboxed subprocesses (completely non-root, zero Shizuku dependency, following v2rayNG architecture). Utilizing app files directory instead of cache directory avoids Android `noexec` mount permission denied errors (exit status 126).
 - **VPN Redirection (`service/vpn.go`)**: Manages Android `VpnService` permissions, TUN interfaces (`10.0.0.2`), and `0.0.0.0/0` traffic routing using pure Go packet processing.
-- **Pure Go Network Stack (`jni/tun2socks.go` & `jni/tun2socks_stub.go`)**: Replaced CGO bindings and native `.so` libraries with a pure Go packet forwarding / SOCKS proxy tunnel implementation, eliminating all CGO dependencies and simplifying cross-compilation.
-- **Configuration (`data/config.go`)**: JSON serialization/deserialization for server settings, SOCKS port, TUN IP, and subscription management (default v2ray config path set to `/data/local/tmp/goout.json`).
-- **UI & Thread Safety (`ui/dashboard.go`)**: Fyne-based control panel with start/stop toggle, settings dialog, asynchronous log updates using `fyne.Do`, word-wrapped multi-line log entry (`logArea.Wrapping = fyne.TextWrapWord`), and `container.NewBorder` layout ensuring the log scroll container extends vertically to the bottom of the window.
+- **Pure Go Network Stack (`jni/tun2socks.go` & `jni/tun2socks_stub.go`)**: Pure Go packet forwarding / SOCKS proxy tunnel implementation, eliminating CGO dependencies and simplifying cross-compilation.
+- **Configuration (`data/config.go`)**: JSON serialization/deserialization for server settings, SOCKS port, TUN IP, and subscription management. Defaults to embedding and deploying [`data/goout.json`](data/goout.json:1) into app private files storage.
+- **UI & Thread Safety (`ui/dashboard.go`)**: Fyne-based control panel displaying version number (`GoOut Control Panel v1.0.0`), start/stop toggle, settings dialog, asynchronous log updates using `fyne.Do`, word-wrapped multi-line log entry, and `container.NewBorder` layout.
 
 ## 2. AGENTS Guidance & AI Assistant Rules
-- Followed Go, Android, Fyne, and Shizuku integration guidelines.
+- Followed Go, Android, Fyne, and non-root sandboxed process execution guidelines (v2rayNG model).
 
 ## 3. Project Status & Current Progress
-- **Completed**: All items in `todolist.md` are fully implemented and verified with unit tests (`data/config_test.go`, `core/process_test.go`) and successful build compilation.
-- **Log Display**: Enabled automatic word wrapping (`fyne.TextWrapWord`) on the dashboard's multi-line log display entry.
-- **Binary Execution & Configuration Paths**:
-  - Main binary extraction attempts `/data/local/tmp/v2ray` first, with automatic graceful fallback to the user cache directory (`os.UserCacheDir()`) if permission is denied.
-  - Default V2Ray configuration path set to `/data/local/tmp/goout.json`.
-- **UI Theme**: Configured application theme to light (`theme.LightTheme()`) ensuring clear font color visibility and contrast across all dashboard and dialog components.
-- **V2Ray Integration Strategy**: V2Ray compiled binary (`v5-goout-android-arm64`) is statically embedded via `go:embed` into [`core/process.go`](core/process.go:15), automatically extracted and given executable permissions at runtime, and invoked via [`core/process.go`](core/process.go:57) `ProcessManager` using `exec.CommandContext` with `-config` parameter and real-time log streaming.
-- **Release Automation**: Added [`build.sh`](build.sh:1) script and GitHub Actions workflow [`.github/workflows/release.yml`](.github/workflows/release.yml:1) to automate cross-platform release compilation (Android arm64 via bundletool & macOS arm64 via fyne package) for GoOut (`com.gzjjjfree.goout`, key alias `goout-alias`).
+- **Version Display**: Added version number `v1.0.0` to the UI title in [`ui/dashboard.go`](ui/dashboard.go:71).
+- **Android Execution Fix**: Extracted binary to app private **files** directory (`files/bin`) rather than `cache` directory to prevent `permission denied` (exit status 126) caused by Android `noexec` cache partition mount.
+- **Default Configuration**: Embedded [`data/goout.json`](data/goout.json:1) via `go:embed` in [`data/config.go`](data/config.go:1) and automatically deployed it as the default v2ray configuration file in app storage.
+- **Shizuku Removal Verification**: Completely removed Shizuku, `su`, and external probing logic. (Note: Old logs showing fallback/Shizuku were due to running a pre-existing installed APK prior to recompilation).
+- **Unit Tests**: All unit tests (`core/process_test.go`, `data/config_test.go`) passed successfully.

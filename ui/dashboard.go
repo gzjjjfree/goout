@@ -68,7 +68,7 @@ func SetupDashboard(w fyne.Window) {
 	})
 
 	topContent := container.NewVBox(
-		widget.NewLabelWithStyle("GoOut Control Panel", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("GoOut Control Panel v1.0.0", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		statusLabel,
 		container.NewHBox(toggleBtn, configBtn),
 		widget.NewSeparator(),
@@ -114,4 +114,3 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 	d.Resize(fyne.NewSize(400, 300))
 	d.Show()
 }
-
