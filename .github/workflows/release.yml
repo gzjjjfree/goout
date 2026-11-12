@@ -69,69 +69,74 @@ jobs:
 
           python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); c=re.sub(r"^version\s*=.*", f"version = \"{sys.argv[1]}\"", c, flags=re.M); c=re.sub(r"^build\s*=.*", f"build = {sys.argv[2]}", c, flags=re.M); open(f,"w").write(c)' "$CLEAN_VERSION" "$BUILD_ID"
 
-          # 2. 手动下载 bundletool
-          BT_VERSION="1.17.0"
-          curl -L -o bundletool.jar https://github.com/google/bundletool/releases/download/${BT_VERSION}/bundletool-all-${BT_VERSION}.jar
-
-          printf "#!/bin/bash\njava -jar $(pwd)/bundletool.jar \"\$@\"" > bundletool
-          chmod +x bundletool
-          export PATH=$PATH:$(pwd)
-
-          # 3. 还原 Keystore
+          # 2. 还原 Keystore
           echo "$K_BASE64" | base64 -d > release.keystore
 
           export ANDROID_HOME=$ANDROID_SDK_ROOT
           export ANDROID_NDK_HOME=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
 
-          # 4. 使用 release 命令进行正式打包（此时会生成 GoOut.aab）
-          fyne release -os android/arm64 \
-            -appID com.gzjjjfree.goout \
-            -icon Icon.png \
-            -keyStore release.keystore \
-            -keyStorePass "$K_PASS" \
-            -keyPass "$K_PASS" \
-            -appVersion "$CLEAN_VERSION" \
-            -appBuild "$BUILD_ID" \
-            -keyName "$K_ALIAS" \
-            -name GoOut
-
-          # ==========================================
-          # 【核心新增】将 libv2ray.so 动态注入到生成的 AAB 中
-          # ==========================================
-          echo "Injecting libv2ray.so into GoOut.aab..."
-
-          # AAB 的内部结构中，原生库应存放在 root/jni/arm64-v8a/libv2ray.so
-          # 我们先创建一个临时目录结构
-          mkdir -p inject_temp/jni/arm64-v8a
-
-          # 确保你的 libv2ray.so 位于正确的仓库路径下（例如 android/app/src/main/jniLibs/arm64-v8a/libv2ray.so）
-          if [ -f "android/app/src/main/jniLibs/arm64-v8a/libv2ray.so" ]; then
-            cp android/app/src/main/jniLibs/arm64-v8a/libv2ray.so inject_temp/jni/arm64-v8a/
-          elif [ -f "core/bin/libv2ray.so" ]; then
-            cp core/bin/libv2ray.so inject_temp/jni/arm64-v8a/
-          else
-            echo "Error: libv2ray.so not found in source tree!"
-            exit 1
+          # 3. 检查源码中存放的 libv2ray.so 是否存在 (假设你放在 core/bin/libv2ray.so 或其他地方)
+          SO_PATH="core/bin/libv2ray.so"
+          if [ ! -f "$SO_PATH" ]; then
+            # 如果你在 android 目录下存了，也可以在这里兼容查找
+            SO_PATH="android/app/src/main/jniLibs/arm64-v8a/libv2ray.so"
           fi
 
-          # 将该动态库追加进 GoOut.aab 压缩包中
-          cd inject_temp
-          zip -r ../GoOut.aab jni/
-          cd ..
-          rm -rf inject_temp
-          echo "Successfully injected libv2ray.so into GoOut.aab!"
+          if [ ! -f "$SO_PATH" ]; then
+            echo "Error: libv2ray.so not found in repository!"
+            exit 1
+          fi
+          echo "Found source .so at: $SO_PATH"
+
+          # 4. 使用 fyne package 直接生成基础 APK（而不是用 release 生成 aab，避开 aab 复杂的模块校验）
+          fyne package -os android/arm64 \
+            -appID com.gzjjjfree.goout \
+            -icon Icon.png \
+            -appVersion "$CLEAN_VERSION" \
+            -appBuild "$BUILD_ID" \
+            -name GoOut
+
+          # 此时会生成一个名为 GoOut.apk 的文件（文件名可能根据 Fyne 版本略有不同，通常为 app名.apk 或包名.apk）
+          # 我们将其重命名统一处理
+          TARGET_APK=$(ls *.apk | head -n 1)
+          echo "Generated APK: $TARGET_APK"
+
           # ==========================================
+          # 【核心】解包 APK -> 注入 .so -> 重新打包 -> 对齐 -> 签名
+          # ==========================================
+          echo "Injecting libv2ray.so into APK..."
+          mkdir -p apk_unpacked
+          unzip -q "$TARGET_APK" -d apk_unpacked
 
-          # 5. 使用 bundletool 生成包含通用 APK 的 apks 压缩包
-          ./bundletool build-apks --bundle=GoOut.aab --output=GoOut.apks --mode=universal --ks=release.keystore --ks-pass=pass:"$K_PASS" --ks-key-alias="$K_ALIAS" --key-pass=pass:"$K_PASS"
+          # 将 .so 放到 APK 标准的 native 库目录下
+          mkdir -p apk_unpacked/lib/arm64-v8a
+          cp "$SO_PATH" apk_unpacked/lib/arm64-v8a/libv2ray.so
 
-          # 从 .apks 中提取出真正的 .apk 文件
-          unzip -p GoOut.apks universal.apk > GoOut_Native.apk
+          # 重新打包成未签名的 APK
+          cd apk_unpacked
+          zip -q -r ../unsigned.apk .
+          cd ..
+          rm -rf apk_unpacked
 
-          echo "Success! GoOut_Native.apk has been generated."
+          # 寻找 SDK 中的 zipalign 和 apksigner 工具
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_SDK_ROOT/build-tools/* | tail -1)
+          ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
 
-          mv GoOut.aab GoOut_Native.aab
-          echo "Success! Native artifacts renamed."
+          # 对齐
+          $ZIPALIGN -v -p 4 unsigned.apk aligned.apk
+
+          # 签名
+          $APKSIGNER sign --ks release.keystore \
+            --ks-key-alias "goout-alias" \
+            --ks-pass "pass:$K_PASS" \
+            --key-pass "pass:$K_PASS" \
+            --out GoOut_Native.apk aligned.apk
+
+          # 清理临时文件
+          rm -f unsigned.apk aligned.apk "$TARGET_APK"
+
+          echo "Success! GoOut_Native.apk has been generated with injected libv2ray.so."
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
