@@ -13,7 +13,7 @@ import (
 	"sync"
 )
 
-//go:embed bin/v5-goout-android-arm64
+//go:embed bin/libv2ray.so
 var v2rayBinary []byte
 
 // ProcessManager manages native binary execution (e.g. v2ray) in app private files storage (non-root sandbox).
@@ -90,31 +90,45 @@ func getWritableDir(subPath ...string) string {
 }
 
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
-	targetDir := getWritableDir("bin")
+	// 1. 优先检查 Android nativeLibraryDir (通过 jniLibs 自动解压到 /data/user/0/<pkg>/lib/libv2ray.so 或 /data/data/<pkg>/lib/libv2ray.so)
+	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(home, "/data") {
+		pkgDir := home
+		if filepath.Base(home) == "cache" || filepath.Base(home) == "files" {
+			pkgDir = filepath.Dir(home)
+		}
+		nativeLibPath := filepath.Join(pkgDir, "lib", "libv2ray.so")
+		if _, err := os.Stat(nativeLibPath); err == nil {
+			pm.addLog("Using native library binary directly from nativeLibraryDir: %s", nativeLibPath)
+			return nativeLibPath, nil
+		}
+		altPath := filepath.Join("/data/data", "com.gzjjjfree.goout", "lib", "libv2ray.so")
+		if _, err := os.Stat(altPath); err == nil {
+			pm.addLog("Using native library binary from alt nativeLibraryDir: %s", altPath)
+			return altPath, nil
+		}
+	}
 
-	// 3. 创建目标目录（在私有分区或临时目录下，拥有绝对的读写权限）
+	// 2. 桌面端或测试环境兜底：写入到可写目录并赋予可执行权限
+	targetDir := getWritableDir("bin")
 	if err := os.MkdirAll(targetDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create target dir %s: %w", targetDir, err)
 	}
 
-	extractPath := filepath.Join(targetDir, "v2ray")
+	extractPath := filepath.Join(targetDir, "libv2ray.so")
 
-	// 4. 将内嵌的二进制数据写入文件
 	if err := os.WriteFile(extractPath, v2rayBinary, 0700); err != nil {
 		return "", fmt.Errorf("failed to write v2ray binary to %s: %w", extractPath, err)
 	}
 
-	// 5. 赋予可执行权限
 	if err := os.Chmod(extractPath, 0700); err != nil {
 		return "", fmt.Errorf("failed to set executable permission on %s: %w", extractPath, err)
 	}
 
-	// *Verification:* 验证文件是否写入成功且具备可执行权限
 	if info, err := os.Stat(extractPath); err != nil || info.Mode()&0100 == 0 {
 		return "", fmt.Errorf("extracted binary is not executable")
 	}
 
-	pm.addLog("Extracted v2ray binary to private storage: %s", extractPath)
+	pm.addLog("Extracted v2ray binary to fallback storage: %s", extractPath)
 	return extractPath, nil
 }
 
