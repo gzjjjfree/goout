@@ -66,18 +66,8 @@ jobs:
           echo "Final App Version: $CLEAN_VERSION"
           echo "Final Build ID (VersionCode): $BUILD_ID"
 
-          # 同步更新 FyneApp.toml 中的版本号和构建号（使用 Python 跨平台更新，避免 macOS BSD sed 兼容性问题）
-          CLEAN_VERSION="$CLEAN_VERSION" BUILD_ID="$BUILD_ID" python3 -c '
-import os, re
-version = os.environ["CLEAN_VERSION"]
-build_id = os.environ["BUILD_ID"]
-with open("FyneApp.toml", "r") as f:
-    content = f.read()
-content = re.sub(r"^version\s*=.*", f"version = \"{version}\"", content, flags=re.MULTILINE)
-content = re.sub(r"^build\s*=.*", f"build = {build_id}", content, flags=re.MULTILINE)
-with open("FyneApp.toml", "w") as f:
-    f.write(content)
-'
+          # 同步更新 FyneApp.toml 中的版本号和构建号（单行跨平台 Python 脚本）
+          python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); c=re.sub(r"^version\s*=.*", f"version = \"{sys.argv[1]}\"", c, flags=re.M); c=re.sub(r"^build\s*=.*", f"build = {sys.argv[2]}", c, flags=re.M); open(f,"w").write(c)' "$CLEAN_VERSION" "$BUILD_ID"
 
           # 2. 手动下载 bundletool (Google 官方)
           BT_VERSION="1.17.0"
@@ -160,16 +150,8 @@ with open("FyneApp.toml", "w") as f:
 
           echo "Final App Version: $CLEAN_VERSION"
 
-          # 同步更新 FyneApp.toml 中的版本号（使用 Python 跨平台更新，避免 macOS BSD sed 兼容性问题）
-          CLEAN_VERSION="$CLEAN_VERSION" python3 -c '
-import os, re
-version = os.environ["CLEAN_VERSION"]
-with open("FyneApp.toml", "r") as f:
-    content = f.read()
-content = re.sub(r"^version\s*=.*", f"version = \"{version}\"", content, flags=re.MULTILINE)
-with open("FyneApp.toml", "w") as f:
-    f.write(content)
-'
+          # 同步更新 FyneApp.toml 中的版本号（单行跨平台 Python 脚本）
+          python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); open(f,"w").write(re.sub(r"^version\s*=.*", f"version = \"{sys.argv[1]}\"", c, flags=re.M))' "$CLEAN_VERSION"
 
           fyne package -os darwin -name GoOut -icon Icon.png --appVersion "$CLEAN_VERSION"
           zip -r GoOut_macOS_arm64.zip GoOut.app
