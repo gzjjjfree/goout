@@ -59,33 +59,38 @@ func (pm *ProcessManager) GetLogs() []string {
 func getWritableDir(subPath ...string) string {
 	candidates := []string{}
 
-	if cache, err := os.UserCacheDir(); err == nil && cache != "" && cache != "/" {
+	if cache, err := os.UserCacheDir(); err == nil && cache != "" && filepath.IsAbs(cache) {
 		if strings.HasPrefix(cache, "/data") {
 			pkgDir := filepath.Dir(cache)
-			candidates = append(candidates, filepath.Join(append([]string{pkgDir, "files"}, subPath...)...))
+			if filepath.IsAbs(pkgDir) {
+				candidates = append(candidates, filepath.Join(append([]string{pkgDir, "files"}, subPath...)...))
+			}
 		}
 		candidates = append(candidates, filepath.Join(append([]string{cache}, subPath...)...))
 	}
 
-	if home, err := os.UserHomeDir(); err == nil && home != "" && home != "/" {
+	if home, err := os.UserHomeDir(); err == nil && home != "" && filepath.IsAbs(home) {
 		if strings.HasPrefix(home, "/data") {
 			pkgDir := home
 			if filepath.Base(home) == "cache" {
 				pkgDir = filepath.Dir(home)
 			}
-			candidates = append(candidates, filepath.Join(append([]string{pkgDir, "files"}, subPath...)...))
+			if filepath.IsAbs(pkgDir) {
+				candidates = append(candidates, filepath.Join(append([]string{pkgDir, "files"}, subPath...)...))
+			}
 		} else {
 			candidates = append(candidates, filepath.Join(append([]string{home, ".goout"}, subPath...)...))
 		}
 	}
 
-	if tmp := os.TempDir(); tmp != "" && tmp != "/" {
+	if tmp := os.TempDir(); tmp != "" && filepath.IsAbs(tmp) {
 		candidates = append(candidates, filepath.Join(append([]string{tmp, "goout"}, subPath...)...))
 	}
 
-	candidates = append(candidates, filepath.Join(append([]string{"goout"}, subPath...)...))
-
 	for _, dir := range candidates {
+		if dir == "" || dir == "/" || !filepath.IsAbs(dir) {
+			continue
+		}
 		if err := os.MkdirAll(dir, 0700); err == nil {
 			testFile := filepath.Join(dir, ".write_test")
 			if err := os.WriteFile(testFile, []byte("test"), 0600); err == nil {
