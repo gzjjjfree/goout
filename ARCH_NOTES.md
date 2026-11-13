@@ -13,7 +13,7 @@
 
 ## 3. Project Status & Current Progress
 - **Version Display**: Dynamically retrieves and displays app version via `fyne.CurrentApp().Metadata().Version` in [`ui/dashboard.go`](ui/dashboard.go:70).
-- **Android Native Library Execution Refactoring**: Refactored binary deployment to use `libv2ray.so` inside `jniLibs/arm64-v8a/` with `android:extractNativeLibs="true"` in [`AndroidManifest.xml`](android/app/src/main/AndroidManifest.xml:1). Runtime process manager directly executes `libv2ray.so` from Android's `nativeLibraryDir`, avoiding any write/execution permission errors.
+- **Android Native Library Execution Refactoring**: Refactored binary deployment to use `libv2ray.so` inside `jniLibs/arm64-v8a/` with `android:extractNativeLibs="true"` in [`AndroidManifest.xml`](android/app/src/main/AndroidManifest.xml:1). Runtime process manager directly locates `libv2ray.so` via `os.Executable()` (`nativeLibraryDir`) with glob pattern fallbacks, avoiding any random hash directory mismatches or permission errors.
 - **Default Configuration**: Embedded [`data/goout.json`](data/goout.json:1) via `go:embed` in [`data/config.go`](data/config.go:1).
 - **Shizuku Removal Verification**: Completely removed Shizuku, `su`, and external probing logic.
 - **Unit Tests**: All unit tests (`core/process_test.go`, `data/config_test.go`) passed successfully.
