@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
@@ -53,52 +52,48 @@ func (pm *ProcessManager) GetLogs() []string {
 }
 
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
-	// 1. 通过 os.Executable() 获取当前正在运行的动态库目录
-	if exe, err := os.Executable(); err == nil && exe != "" {
-		dir := filepath.Dir(exe)
-		pm.addLog("Current running library dir: %s", dir)
+	// 明确已知的应用包名
+	pkgName := "com.gzjjjfree.goout"
 
-		// 检查同级目录
-		target := filepath.Join(dir, "libv2ray.so")
-		if info, err := os.Stat(target); err == nil && !info.IsDir() {
-			pm.addLog("Found libv2ray.so directly at: %s", target)
-			return target, nil
-		}
+	// 1. 直接精准罗列 Android 标准原生库目录（系统解压APK中 jniLibs 的固定位置）
+	var candidatePaths []string
 
-		// 检查上级目录或同级子目录（应对 arm64 与 arm64-v8a 命名差异）
-		parentDir := filepath.Dir(dir)
-		patterns := []string{
-			filepath.Join(dir, "*", "libv2ray.so"),
-			filepath.Join(parentDir, "*", "libv2ray.so"),
-			filepath.Join(parentDir, "libv2ray.so"),
+	// 如果能拿到 UserHomeDir（例如 /data/user/0/com.gzjjjfree.goout 或其 cache 子目录）
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		pkgDir := home
+		base := filepath.Base(home)
+		if base == "cache" || base == "files" || base == "code_cache" {
+			pkgDir = filepath.Dir(home)
 		}
-		for _, pat := range patterns {
-			if matches, err := filepath.Glob(pat); err == nil {
-				for _, m := range matches {
-					if info, err := os.Stat(m); err == nil && !info.IsDir() {
-						pm.addLog("Found libv2ray.so via pattern %s at: %s", pat, m)
-						return m, nil
-					}
-				}
-			}
-		}
+		candidatePaths = append(candidatePaths,
+			filepath.Join(pkgDir, "lib", "arm64-v8a", "libv2ray.so"),
+			filepath.Join(pkgDir, "lib", "arm64", "libv2ray.so"),
+			filepath.Join(pkgDir, "lib", "libv2ray.so"),
+		)
+	}
 
-		// 【关键调试】如果还没找到，打印当前目录下所有文件，方便在日志中观察真实结构
-		if entries, err := os.ReadDir(dir); err == nil {
-			var names []string
-			for _, e := range entries {
-				names = append(names, e.Name())
-			}
-			pm.addLog("DEBUG: Files in current library dir (%s): [%s]", dir, strings.Join(names, ", "))
+	// 绝对路径强力兜底（覆盖所有 Android 版本的标准的沙盒 UID 目录）
+	candidatePaths = append(candidatePaths,
+		fmt.Sprintf("/data/user/0/%s/lib/arm64-v8a/libv2ray.so", pkgName),
+		fmt.Sprintf("/data/user/0/%s/lib/arm64/libv2ray.so", pkgName),
+		fmt.Sprintf("/data/user/0/%s/lib/libv2ray.so", pkgName),
+		fmt.Sprintf("/data/data/%s/lib/arm64-v8a/libv2ray.so", pkgName),
+		fmt.Sprintf("/data/data/%s/lib/arm64/libv2ray.so", pkgName),
+		fmt.Sprintf("/data/data/%s/lib/libv2ray.so", pkgName),
+	)
+
+	// 2. 依次检查硬编码的绝对路径
+	for _, path := range candidatePaths {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			pm.addLog("Found native library via absolute path at: %s", path)
+			return path, nil
 		}
 	}
 
-	// 2. 兜底：使用更广泛的全局通配符扫描
+	// 3. 如果绝对路径没命中，再用 Glob 兜底扫描动态安装路径（如 /data/app/~~.../）
 	fallbackPatterns := []string{
-		"/data/app/*/com.gzjjjfree.goout*/lib/*/libv2ray.so",
-		"/data/app/*/com.gzjjjfree.goout*/lib/libv2ray.so",
-		"/data/user/0/com.gzjjjfree.goout/lib/*/libv2ray.so",
-		"/data/user/0/com.gzjjjfree.goout/lib/libv2ray.so",
+		fmt.Sprintf("/data/app/*/%s*/lib/*/libv2ray.so", pkgName),
+		fmt.Sprintf("/data/app/*/%s*/lib/libv2ray.so", pkgName),
 	}
 
 	for _, pattern := range fallbackPatterns {
@@ -114,7 +109,7 @@ func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("libv2ray.so not found. Check app logs for 'DEBUG: Files in current library dir'")
+	return "", fmt.Errorf("libv2ray.so not found. Absolute paths checked but none matched.")
 }
 
 func (pm *ProcessManager) Start(configPath string) error {
