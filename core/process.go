@@ -52,7 +52,17 @@ func (pm *ProcessManager) GetLogs() []string {
 }
 
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
-	// 定义所有可能的路径通配符模式（兼容 Android 各种版本的随机哈希目录与架构子目录）
+	// 1. 优先通过 os.Executable() 获取当前原生动态库所在目录（nativeLibraryDir），100% 兼容 Android 随机哈希目录
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		dir := filepath.Dir(exe)
+		target := filepath.Join(dir, "libv2ray.so")
+		if info, err := os.Stat(target); err == nil && !info.IsDir() {
+			pm.addLog("Found native library via os.Executable at: %s", target)
+			return target, nil
+		}
+	}
+
+	// 2. 定义所有可能的路径通配符模式（降级兜底）
 	patterns := []string{
 		// 1. 动态安装路径模糊匹配 (/data/app/~~.../lib/arm64/libv2ray.so)
 		"/data/app/*/com.gzjjjfree.goout*/lib/*/libv2ray.so",
