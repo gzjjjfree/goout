@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 
 	"fyne.io/fyne/v2"
@@ -13,6 +14,10 @@ import (
 	"github.com/gzjjjfree/goout/service"
 )
 
+func InspectNativeLibs() {
+
+}
+
 func SetupDashboard(w fyne.Window) {
 	cfg, err := data.LoadConfig("config.json")
 	if err != nil {
@@ -22,6 +27,28 @@ func SetupDashboard(w fyne.Window) {
 	logArea := widget.NewMultiLineEntry()
 	logArea.Wrapping = fyne.TextWrapWord
 	logArea.SetText("GoOut initialized successfully.\nReady to start proxy...")
+
+	// =================================
+
+	// 尝试读取应用自身的私有 lib 目录
+	libDirs := []string{
+		"/data/user/0/com.gzjjjfree.goout/lib",
+		"/data/data/com.gzjjjfree.goout/lib",
+	}
+
+	for _, dir := range libDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			logArea.SetText(fmt.Sprint("[INSPECT] ReadDir %s failed: %v\n", dir, err))
+			continue
+		}
+		fmt.Printf("[INSPECT] Found files in %s:\n", dir)
+		for _, e := range entries {
+			logArea.SetText(fmt.Sprint(" - %s (IsDir: %v)\n", e.Name(), e.IsDir()))
+		}
+	}
+
+	// =================================
 
 	// Callback for real-time log updates with fyne.Do (UI Thread Safety)
 	onLog := func(msg string) {
