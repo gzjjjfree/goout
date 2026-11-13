@@ -36,17 +36,20 @@ func SetupDashboard(w fyne.Window) {
 		"/data/data/com.gzjjjfree.goout/lib",
 	}
 
+	logstring := ""
 	for _, dir := range libDirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			logArea.SetText(fmt.Sprint("[INSPECT] ReadDir %s failed: %v\n", dir, err))
+			logstring = logstring + fmt.Sprint("[INSPECT] ReadDir %s failed: %v\n", dir, err)
 			continue
 		}
-		fmt.Printf("[INSPECT] Found files in %s:\n", dir)
+		logstring = logstring + fmt.Sprint("[INSPECT] Found files in %s:\n", dir)
 		for _, e := range entries {
-			logArea.SetText(fmt.Sprint(" - %s (IsDir: %v)\n", e.Name(), e.IsDir()))
+			logstring = logstring + fmt.Sprint(" - %s (IsDir: %v)\n", e.Name(), e.IsDir())
 		}
 	}
+
+	logArea.SetText(logstring)
 
 	// =================================
 
