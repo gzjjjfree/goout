@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -52,57 +53,68 @@ func (pm *ProcessManager) GetLogs() []string {
 }
 
 func (pm *ProcessManager) ExtractAndGetBinaryPath() (string, error) {
-	// 1. 优先通过 os.Executable() 获取当前原生动态库所在目录（nativeLibraryDir），100% 兼容 Android 随机哈希目录
+	// 1. 通过 os.Executable() 获取当前正在运行的动态库目录
 	if exe, err := os.Executable(); err == nil && exe != "" {
 		dir := filepath.Dir(exe)
+		pm.addLog("Current running library dir: %s", dir)
+
+		// 检查同级目录
 		target := filepath.Join(dir, "libv2ray.so")
 		if info, err := os.Stat(target); err == nil && !info.IsDir() {
-			pm.addLog("Found native library via os.Executable at: %s", target)
+			pm.addLog("Found libv2ray.so directly at: %s", target)
 			return target, nil
 		}
+
+		// 检查上级目录或同级子目录（应对 arm64 与 arm64-v8a 命名差异）
+		parentDir := filepath.Dir(dir)
+		patterns := []string{
+			filepath.Join(dir, "*", "libv2ray.so"),
+			filepath.Join(parentDir, "*", "libv2ray.so"),
+			filepath.Join(parentDir, "libv2ray.so"),
+		}
+		for _, pat := range patterns {
+			if matches, err := filepath.Glob(pat); err == nil {
+				for _, m := range matches {
+					if info, err := os.Stat(m); err == nil && !info.IsDir() {
+						pm.addLog("Found libv2ray.so via pattern %s at: %s", pat, m)
+						return m, nil
+					}
+				}
+			}
+		}
+
+		// 【关键调试】如果还没找到，打印当前目录下所有文件，方便在日志中观察真实结构
+		if entries, err := os.ReadDir(dir); err == nil {
+			var names []string
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			pm.addLog("DEBUG: Files in current library dir (%s): [%s]", dir, strings.Join(names, ", "))
+		}
 	}
 
-	// 2. 定义所有可能的路径通配符模式（降级兜底）
-	patterns := []string{
-		// 1. 动态安装路径模糊匹配 (/data/app/~~.../lib/arm64/libv2ray.so)
+	// 2. 兜底：使用更广泛的全局通配符扫描
+	fallbackPatterns := []string{
 		"/data/app/*/com.gzjjjfree.goout*/lib/*/libv2ray.so",
 		"/data/app/*/com.gzjjjfree.goout*/lib/libv2ray.so",
-
-		// 2. 经典沙盒私有路径匹配
 		"/data/user/0/com.gzjjjfree.goout/lib/*/libv2ray.so",
 		"/data/user/0/com.gzjjjfree.goout/lib/libv2ray.so",
-		"/data/data/com.gzjjjfree.goout/lib/*/libv2ray.so",
-		"/data/data/com.gzjjjfree.goout/lib/libv2ray.so",
 	}
 
-	// 如果通过 UserHomeDir 能获取到当前用户的私有目录，也加入通配符
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		pkgDir := home
-		base := filepath.Base(home)
-		if base == "cache" || base == "files" || base == "code_cache" {
-			pkgDir = filepath.Dir(home)
-		}
-		patterns = append(patterns,
-			filepath.Join(pkgDir, "lib", "*", "libv2ray.so"),
-			filepath.Join(pkgDir, "lib", "libv2ray.so"),
-		)
-	}
-
-	// 遍历所有模式进行 Glob 匹配
-	for _, pattern := range patterns {
+	for _, pattern := range fallbackPatterns {
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
 			continue
 		}
 		for _, path := range matches {
 			if info, err := os.Stat(path); err == nil && !info.IsDir() {
-				pm.addLog("Found native library via glob at: %s", path)
+				pm.addLog("Found native library via fallback glob at: %s", path)
 				return path, nil
 			}
 		}
 	}
 
-	return "", fmt.Errorf("libv2ray.so not found via glob. Check if jniLibs is packaged correctly")
+	return "", fmt.Errorf("libv2ray.so not found. Check app logs for 'DEBUG: Files in current library dir'")
 }
 
 func (pm *ProcessManager) Start(configPath string) error {
