@@ -205,7 +205,7 @@ jobs:
           mkdir -p release_assets
 
           cp android-apk/GoOut_Native.apk release_assets/GoOut.apk
-          cp android-apk/GoOut_Native.aab release_assets/GoOut.aab
+          # cp android-apk/GoOut_Native.aab release_assets/GoOut.aab
 
           cp macos-app/*.zip release_assets/
 
