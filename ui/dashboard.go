@@ -656,11 +656,39 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 		_ = data.SaveConfig("config_save.json", cfg)
 
 		// 保存 V2Ray JSON 配置
-		if outBytes, err := json.MarshalIndent(rawCfg, "", "    "); err == nil {
+		var outBytes []byte
+		var err error
+		if outBytes, err = json.MarshalIndent(rawCfg, "", "    "); err == nil {
 			_ = os.WriteFile(configPath, outBytes, 0644)
+		} else {
+			dialog.ShowError(fmt.Errorf("failed to marshal config: %w", err), w)
+			return
 		}
 
-		dialog.ShowInformation("成功", "所有配置及 V2Ray 核心规则已成功保存！", w)
+		// 使用 v2ray 检查 config 文件
+		mgr := core.GetManager(nil)
+		if checkErr := mgr.CheckConfig(outBytes); checkErr != nil {
+			dialog.ShowError(fmt.Errorf("V2Ray 核心配置检查失败: %w", checkErr), w)
+			return
+		}
+
+		// 显示 config 全文
+		configTextEntry := widget.NewMultiLineEntry()
+		configTextEntry.SetText(string(outBytes))
+		configTextEntry.Wrapping = fyne.TextWrapWord
+
+		scroll := container.NewVScroll(configTextEntry)
+		scroll.SetMinSize(fyne.NewSize(500, 350))
+
+		infoBox := container.NewVBox(
+			widget.NewLabelWithStyle("配置保存成功，V2Ray 核心检查通过！", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			widget.NewLabel("Config 全文如下："),
+			scroll,
+		)
+
+		dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
+		dInfo.Resize(fyne.NewSize(600, 500))
+		dInfo.Show()
 	})
 
 	dialogContent := container.NewBorder(nil, saveBtn, nil, nil, tabs)
