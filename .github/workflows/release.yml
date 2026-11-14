@@ -41,7 +41,10 @@ jobs:
           packages: "platforms;android-34 build-tools;34.0.0 ndk;26.1.10909125"
 
       - name: Install Fyne CLI
-        run: go install fyne.io/tools/cmd/fyne@latest
+        run: |
+          go install fyne.io/tools/cmd/fyne@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          go install golang.org/x/mobile/cmd/gomobile@latest
 
       - name: Build Android (Native Mode)
         env:
