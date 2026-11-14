@@ -75,8 +75,8 @@ jobs:
           export ANDROID_HOME=$ANDROID_SDK_ROOT
           export ANDROID_NDK_HOME=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
 
-          # 3. 使用 fyne package 直接生成基础 APK
-          fyne package -os android/arm64 \
+          # 3. 使用 fyne package 直接生成基础 APK (带 -ldflags=-s -w 移除调试符号)
+          GOFLAGS="-ldflags=-s -w" fyne package -os android/arm64 \
             -appID com.gzjjjfree.goout \
             -icon Icon.png \
             -appVersion "$CLEAN_VERSION" \

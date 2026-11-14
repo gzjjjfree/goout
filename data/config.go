@@ -14,22 +14,22 @@ var defaultConfigFile []byte
 //go:embed geosite.dat
 var embeddedGeosite []byte
 
-// EnsureGeositeDat 确保 geosite.dat 在所有可能的工作目录、可执行目录及可写存储目录下可用，并设置 v2ray.location.asset 环境变量
+// EnsureGeositeDat 确保 geosite.dat 在所有可能的可写存储目录、工作目录及可执行目录下可用，并设置 v2ray.location.asset 环境变量
 func EnsureGeositeDat() {
 	if len(embeddedGeosite) == 0 {
 		return
 	}
 
 	dirs := []string{}
+	writable := getWritableDir()
+	if writable != "" {
+		dirs = append(dirs, writable)
+	}
 	if wd, err := os.Getwd(); err == nil && wd != "" {
 		dirs = append(dirs, wd)
 	}
 	if exe, err := os.Executable(); err == nil && exe != "" {
 		dirs = append(dirs, filepath.Dir(exe))
-	}
-	writable := getWritableDir()
-	if writable != "" {
-		dirs = append(dirs, writable)
 	}
 
 	var primaryDir string
@@ -37,11 +37,14 @@ func EnsureGeositeDat() {
 		if dir == "" {
 			continue
 		}
-		_ = os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			continue
+		}
 		p := filepath.Join(dir, "geosite.dat")
-		_ = os.WriteFile(p, embeddedGeosite, 0644)
-		if primaryDir == "" {
-			primaryDir = dir
+		if err := os.WriteFile(p, embeddedGeosite, 0644); err == nil {
+			if primaryDir == "" {
+				primaryDir = dir
+			}
 		}
 	}
 
@@ -51,6 +54,9 @@ func EnsureGeositeDat() {
 	if primaryDir != "" {
 		_ = os.Setenv("v2ray.location.asset", primaryDir)
 		_ = os.Setenv("V2RAY_LOCATION_ASSET", primaryDir)
+	} else if writable != "" {
+		_ = os.Setenv("v2ray.location.asset", writable)
+		_ = os.Setenv("V2RAY_LOCATION_ASSET", writable)
 	}
 }
 

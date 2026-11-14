@@ -170,3 +170,16 @@ func (m *V2rayManager) IsRunning() bool {
 	defer m.mu.Unlock()
 	return m.isRunning
 }
+
+// CheckConfig 使用 V2Ray 核心检查/验证配置是否合法
+func (m *V2rayManager) CheckConfig(configJSON []byte) error {
+	data.EnsureGeositeDat()
+	instance, err := v2core.StartInstance("json", configJSON)
+	if err != nil {
+		return fmt.Errorf("v2ray config check failed: %w", err)
+	}
+	if instance != nil {
+		_ = instance.Close()
+	}
+	return nil
+}
