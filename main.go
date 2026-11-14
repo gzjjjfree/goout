@@ -9,7 +9,7 @@ import (
 func main() {
 	a := app.NewWithID("com.gzjjjfree.goout")
 	a.Settings().SetTheme(theme.LightTheme())
-	w := a.NewWindow("GoOut - Proxy & System Utility")
+	w := a.NewWindow("GoOut - 代理与系统工具")
 
 	ui.SetupDashboard(w)
 
