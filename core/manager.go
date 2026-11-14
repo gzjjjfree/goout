@@ -1,9 +1,12 @@
 package core
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	v2core "github.com/gzjjjfree/v5-result"
@@ -11,6 +14,65 @@ import (
 	_ "github.com/gzjjjfree/v5-result/main/distro/all"
 	"github.com/gzjjjfree/goout/data"
 )
+
+var (
+	earlyLogs []string
+	earlyMu   sync.Mutex
+)
+
+func init() {
+	setupLogCapture()
+}
+
+func setupLogCapture() {
+	oldStderr := os.Stderr
+	rErr, wErr, err := os.Pipe()
+	if err == nil {
+		os.Stderr = wErr
+		go func() {
+			scanner := bufio.NewScanner(rErr)
+			for scanner.Scan() {
+				line := scanner.Text()
+				_, _ = oldStderr.WriteString(line + "\n")
+
+				trimmed := strings.TrimSpace(line)
+				if trimmed != "" {
+					earlyMu.Lock()
+					if globalManager != nil {
+						globalManager.addLog("%s", trimmed)
+					} else {
+						earlyLogs = append(earlyLogs, trimmed)
+					}
+					earlyMu.Unlock()
+				}
+			}
+		}()
+	}
+
+	oldStdout := os.Stdout
+	rOut, wOut, err := os.Pipe()
+	if err == nil {
+		os.Stdout = wOut
+		go func() {
+			scanner := bufio.NewScanner(rOut)
+			for scanner.Scan() {
+				line := scanner.Text()
+				_, _ = oldStdout.WriteString(line + "\n")
+
+				trimmed := strings.TrimSpace(line)
+				if trimmed != "" {
+					earlyMu.Lock()
+					if globalManager != nil {
+						globalManager.addLog("%s", trimmed)
+					} else {
+						earlyLogs = append(earlyLogs, trimmed)
+					}
+					earlyMu.Unlock()
+				}
+			}
+		}()
+	}
+}
 
 // V2rayManager 管理 V2Ray 核心在内存中的生命周期（适配 Android 10+ W^X 安全策略）
 type V2rayManager struct {
@@ -50,7 +112,36 @@ func GetManager(onLog func(string)) *V2rayManager {
 		}
 		globalManager.initLogHandler()
 	})
+	if onLog != nil {
+		globalManager.mu.Lock()
+		globalManager.onLog = onLog
+		globalManager.mu.Unlock()
+	}
+
+	earlyMu.Lock()
+	if len(earlyLogs) > 0 {
+		for _, l := range earlyLogs {
+			globalManager.addLog("%s", l)
+		}
+		earlyLogs = nil
+	}
+	earlyMu.Unlock()
+
 	return globalManager
+}
+
+func (m *V2rayManager) addLog(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	m.logMu.Lock()
+	m.logs = append(m.logs, msg)
+	if len(m.logs) > m.maxLogs {
+		m.logs = m.logs[1:]
+	}
+	m.logMu.Unlock()
+
+	if m.onLog != nil {
+		m.onLog(msg)
+	}
 }
 
 func (m *V2rayManager) initLogHandler() {
