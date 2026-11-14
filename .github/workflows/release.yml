@@ -88,13 +88,8 @@ jobs:
 
           export ANDROID_HOME=$ANDROID_SDK_ROOT
 
-          # 安全查找 NDK 路径
-          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* 2>/dev/null | tail -1)
-          if [ -n "$NDK_PATH" ]; then
-            export ANDROID_NDK_HOME="$NDK_PATH"
-          else
-            export ANDROID_NDK_HOME=$(ls -d $ANDROID_SDK_ROOT/ndk-bundle 2>/dev/null || echo "")
-          fi
+          # 强制锁定使用 NDK 26，防止高版本 NDK 引发 Fyne 崩溃
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/26.1.10909125"
           echo "Using Android NDK: $ANDROID_NDK_HOME"
 
           # 4. 使用 release 命令进行正式打包（加入 GOFLAGS 剔除调试符号以实现体积优化）
