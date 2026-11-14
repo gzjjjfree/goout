@@ -1,20 +1,19 @@
 # Architecture Notes (ARCH_NOTES.md)
 
 ## 1. Core Architecture & Module Design
-- **Entry Point**: [`main.go`](main.go:1) initializes Fyne app and calls [`ui.SetupDashboard`](ui/dashboard.go:1).
-- **Process Management (`core/process.go`)**: Manages subprocesses (`libv2ray.so`) by placing the binary as `libv2ray.so` in `android/app/src/main/jniLibs/arm64-v8a/` with `android:extractNativeLibs="true"` in [`AndroidManifest.xml`](android/app/src/main/AndroidManifest.xml:1). At runtime, it directly executes from Android's `nativeLibraryDir` (`/data/user/0/<pkg>/lib/libv2ray.so` or `/data/data/<pkg>/lib/libv2ray.so`), completely bypassing any runtime file writing or permission denied errors, while maintaining fallback embedding for desktop/testing.
+- **Entry Point**: [`main.go`](main.go:1) initializes Fyne app and calls [`ui.SetupDashboard`](ui/dashboard.go:21).
+- **In-Memory V2Ray Core Manager (`core/manager.go`)**: Fully replaces obsolete process execution to bypass modern Android 10+ W^X (Write xor Execute) security restrictions. Integrates `github.com/gzjjjfree/v5-result` directly as a Go library package in memory. Features thread-safe lifecycle control (`Start`, `Stop`), `sync.Mutex` concurrency protection, `panic recovery` safeguarding the Fyne UI thread from core crashes, and custom log handler interception (`v2log.RegisterHandler`) routing logs to UI log callbacks.
+- **Geodata & Asset Management (`data/config.go`)**: [`EnsureGeositeDat`](data/config.go:18) automatically deploys embedded `geosite.dat` across working directories, executable directories, and writable app storage paths, setting `v2ray.location.asset` and `V2RAY_LOCATION_ASSET` environment variables to ensure robust geosite rule resolution.
 - **VPN Redirection (`service/vpn.go`)**: Manages Android `VpnService` permissions, TUN interfaces (`10.0.0.2`), and `0.0.0.0/0` traffic routing using pure Go packet processing.
 - **Pure Go Network Stack (`jni/tun2socks.go` & `jni/tun2socks_stub.go`)**: Pure Go packet forwarding / SOCKS proxy tunnel implementation, eliminating CGO dependencies and simplifying cross-compilation.
-- **Configuration (`data/config.go`)**: JSON serialization/deserialization for server settings, SOCKS port, TUN IP, and subscription management. Defaults to embedding and deploying [`data/goout.json`](data/goout.json:1) into app private files storage.
-- **UI & Thread Safety (`ui/dashboard.go`)**: Fyne-based control panel displaying version number (`GoOut Control Panel v1.0.0`), start/stop toggle, settings dialog, asynchronous log updates using `fyne.Do`, word-wrapped multi-line log entry, and `container.NewBorder` layout.
+- **Configuration & Routing (`data/config.go` & [`goout.json`](goout.json:1))**: JSON configuration with default VLESS setup (valid UUID) and routing balancers (`cdn-balancer-proxy`).
+- **UI & Thread Safety & Multi-Tab Settings (`ui/dashboard.go`)**: Fyne-based control panel localized entirely in Chinese, featuring start/stop toggle, comprehensive multi-tab settings dialog (`主设置`, `入站设置`, `出站设置`, `路由设置`) supporting complete CRUD operations on `inbounds`, `outbounds`, `domainStrategy`, `balancers`, and `rules` with automatic nesting mapping (`vnext`, `tlsSettings`, `wsSettings`), asynchronous log updates using `fyne.Do`, and dual configuration persistence (`config_save.json` and V2Ray JSON).
 
 ## 2. AGENTS Guidance & AI Assistant Rules
-- Followed Go, Android, Fyne, and non-root sandboxed process execution guidelines (v2rayNG model).
+- Followed Go, Android, Fyne, and sandboxed in-memory library execution guidelines.
 
 ## 3. Project Status & Current Progress
-- **Version Display**: Dynamically retrieves and displays app version via `fyne.CurrentApp().Metadata().Version` in [`ui/dashboard.go`](ui/dashboard.go:70).
-- **Android Native Library Execution Refactoring**: Refactored binary deployment to use `libv2ray.so` inside `jniLibs/arm64-v8a/` with `android:extractNativeLibs="true"` in [`AndroidManifest.xml`](android/app/src/main/AndroidManifest.xml:1). Runtime process manager directly locates `libv2ray.so` via `os.Executable()` (`nativeLibraryDir`) with glob pattern fallbacks, avoiding any random hash directory mismatches or permission errors.
-- **Default Configuration**: Embedded [`data/goout.json`](data/goout.json:1) via `go:embed` in [`data/config.go`](data/config.go:1).
-- **Shizuku Removal Verification**: Completely removed Shizuku, `su`, and external probing logic.
-- **Unit Tests**: All unit tests (`core/process_test.go`, `data/config_test.go`) passed successfully.
-- **CI/CD Versioning (`.github/workflows/release.yml`)**: Enhanced GitHub Actions workflow to support manual version input, git tag detection, and dynamic monotonic `appBuild` generation.
+- **Multi-Tab Advanced Settings Interface**: Successfully implemented the comprehensive settings UI in [`ui/dashboard.go`](ui/dashboard.go:110) with 4 tabs (`主设置`, `入站设置`, `出站设置`, `路由设置`). Refactored `主设置` to retain only TUN IP setting. Optimized `入站设置` and `出站设置` layout using `container.NewBorder` so that scrollable content containers stretch fully to the bottom.
+- **In-Memory V2Ray Core Manager**: Implemented [`core/manager.go`](core/manager.go:1) using `github.com/gzjjjfree/v5-result` and `v2core.StartInstance("json", configBytes)` with panic recovery and log redirection.
+- **Geosite & Asset Resolution Fixed**: Updated [`EnsureGeositeDat`](data/config.go:18) to deploy `geosite.dat` universally and configure `v2ray.location.asset` environment variables.
+- **Unit & Build Verification**: All unit tests and build checks passed successfully.

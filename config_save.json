@@ -1,0 +1,12 @@
+{
+  "v2ray_config_path": "/home/dmin/.cache/goout.json",
+  "socks_port": 10819,
+  "tun_ip": "10.0.0.2",
+  "server_address": "127.0.0.1",
+  "server_port": 10809,
+  "subscriptions": [],
+  "routing_bypass": [
+    "10.0.0.0/8",
+    "192.168.0.0/16"
+  ]
+}

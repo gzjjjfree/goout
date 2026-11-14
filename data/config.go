@@ -11,6 +11,49 @@ import (
 //go:embed goout.json
 var defaultConfigFile []byte
 
+//go:embed geosite.dat
+var embeddedGeosite []byte
+
+// EnsureGeositeDat 确保 geosite.dat 在所有可能的工作目录、可执行目录及可写存储目录下可用，并设置 v2ray.location.asset 环境变量
+func EnsureGeositeDat() {
+	if len(embeddedGeosite) == 0 {
+		return
+	}
+
+	dirs := []string{}
+	if wd, err := os.Getwd(); err == nil && wd != "" {
+		dirs = append(dirs, wd)
+	}
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		dirs = append(dirs, filepath.Dir(exe))
+	}
+	writable := getWritableDir()
+	if writable != "" {
+		dirs = append(dirs, writable)
+	}
+
+	var primaryDir string
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		_ = os.MkdirAll(dir, 0755)
+		p := filepath.Join(dir, "geosite.dat")
+		_ = os.WriteFile(p, embeddedGeosite, 0644)
+		if primaryDir == "" {
+			primaryDir = dir
+		}
+	}
+
+	// 同时在当前相对路径写入一份
+	_ = os.WriteFile("geosite.dat", embeddedGeosite, 0644)
+
+	if primaryDir != "" {
+		_ = os.Setenv("v2ray.location.asset", primaryDir)
+		_ = os.Setenv("V2RAY_LOCATION_ASSET", primaryDir)
+	}
+}
+
 type Config struct {
 	V2RayConfigPath string   `json:"v2ray_config_path"`
 	SocksPort       int      `json:"socks_port"`
@@ -110,4 +153,8 @@ func SaveConfig(path string, cfg *Config) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+func GetDefaultConfigBytes() []byte {
+	return defaultConfigFile
 }
