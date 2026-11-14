@@ -21,8 +21,6 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -30,21 +28,14 @@ jobs:
           go-version: "1.26.4"
 
       - name: Set up Java
+        # 签名工具 apksigner 需要 Java 环境
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: "platforms;android-34 build-tools;34.0.0 ndk;26.1.10909125"
-
       - name: Install Fyne CLI
-        run: |
-          go install fyne.io/tools/cmd/fyne@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
-          go install golang.org/x/mobile/cmd/gomobile@latest
+        run: go install fyne.io/fyne/v2/cmd/fyne@latest
 
       - name: Build Android (Native Mode)
         env:
@@ -52,7 +43,7 @@ jobs:
           K_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           K_ALIAS: "goout-alias"
         run: |
-          # 1. 更加健壮的版本号获取（兼容 Tag 触发、手动输入与普通推送）
+          # 1. 确定版本号：优先使用手动触发输入 -> 其次使用 Git Tag -> 最后通过 git describe 自动推导
           if [ -n "${{ github.event.inputs.version }}" ]; then
             RAW_VERSION="${{ github.event.inputs.version }}"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
@@ -60,43 +51,35 @@ jobs:
           else
             RAW_VERSION=$(git describe --tags --always 2>/dev/null || echo "1.0.0")
           fi
-
-          if [[ $RAW_VERSION =~ ^v?[0-9] ]]; then
-            CLEAN_VERSION=$(echo $RAW_VERSION | sed 's/^v//' | sed 's/-.*//')
-          else
+          CLEAN_VERSION=$(echo "$RAW_VERSION" | sed 's/^v//' | sed 's/-.*//')
+          if [ -z "$CLEAN_VERSION" ] || ! [[ "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then
             CLEAN_VERSION="1.0.0"
           fi
 
-          BUILD_ID=${{ github.run_number }}
+          # Android versionCode 必须为整数，使用 git 提交总数作为自增构建号（或 fallback 到 github.run_number）
+          BUILD_ID=$(git rev-list --count HEAD 2>/dev/null || echo "${{ github.run_number }}")
+          if [ -z "$BUILD_ID" ] || ! [[ "$BUILD_ID" =~ ^[0-9]+$ ]]; then
+            BUILD_ID="${{ github.run_number }}"
+          fi
           echo "Final App Version: $CLEAN_VERSION"
-          echo "Final Build ID: $BUILD_ID"
-
-          # 同步更新 FyneApp.toml 中的版本
+          echo "Final Build ID (VersionCode): $BUILD_ID"
+          # 同步更新 FyneApp.toml 中的版本号和构建号（单行跨平台 Python 脚本）
           python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); c=re.sub(r"^version\s*=.*", f"version = \"{sys.argv[1]}\"", c, flags=re.M); c=re.sub(r"^build\s*=.*", f"build = {sys.argv[2]}", c, flags=re.M); open(f,"w").write(c)' "$CLEAN_VERSION" "$BUILD_ID"
-
           # 2. 手动下载 bundletool (Google 官方)
           BT_VERSION="1.17.0"
           curl -L -o bundletool.jar https://github.com/google/bundletool/releases/download/${BT_VERSION}/bundletool-all-${BT_VERSION}.jar
-
-          # 创建一个命令脚本，让 fyne 能够通过 "bundletool" 这个名字调用它
+          # 3. 创建一个命令脚本，让 fyne 能够通过 "bundletool" 这个名字调用它
           printf "#!/bin/bash\njava -jar $(pwd)/bundletool.jar \"\$@\"" > bundletool
           chmod +x bundletool
           export PATH=$PATH:$(pwd)
-
           # 验证 bundletool 是否可用
           ./bundletool version
-
-          # 3. 还原 Keystore
+          # 4. 还原 Keystore
           echo "$K_BASE64" | base64 -d > release.keystore
-
           export ANDROID_HOME=$ANDROID_SDK_ROOT
-
-          # 强制锁定使用 NDK 26，防止高版本 NDK 引发 Fyne 崩溃
-          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/26.1.10909125"
-          echo "Using Android NDK: $ANDROID_NDK_HOME"
-
-          # 4. 使用 release 命令进行正式打包（加入 GOFLAGS 剔除调试符号以实现体积优化）
-          GOFLAGS="-ldflags=-s -w" fyne release -os android/arm64 \
+          export ANDROID_NDK_HOME=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
+          # 5. 使用 release 命令进行正式打包
+          fyne release -os android/arm64 \
             -appID com.gzjjjfree.goout \
             -icon Icon.png \
             -keyStore release.keystore \
@@ -106,17 +89,13 @@ jobs:
             -appBuild "$BUILD_ID" \
             -keyName "$K_ALIAS" \
             -name GoOut
-
           # 使用 bundletool 生成包含通用 APK 的 apks 压缩包
           ./bundletool build-apks --bundle=GoOut.aab --output=GoOut.apks --mode=universal --ks=release.keystore --ks-pass=pass:"$K_PASS" --ks-key-alias="$K_ALIAS" --key-pass=pass:"$K_PASS"
-
           # 从 .apks 中提取出真正的 .apk 文件
           unzip -p GoOut.apks universal.apk > GoOut_Native.apk
           echo "Success! GoOut_Native.apk has been generated."
-
           mv GoOut.aab GoOut_Native.aab
           echo "Success! Native artifacts renamed."
-
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
@@ -124,14 +103,11 @@ jobs:
           path: |
             *.apk
             *.aab
-
   build-macos:
     runs-on: macos-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -150,20 +126,15 @@ jobs:
           else
             RAW_VERSION=$(git describe --tags --always 2>/dev/null || echo "1.0.0")
           fi
-
           CLEAN_VERSION=$(echo "$RAW_VERSION" | sed 's/^v//' | sed 's/-.*//')
           if [ -z "$CLEAN_VERSION" ] || ! [[ "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then
             CLEAN_VERSION="1.0.0"
           fi
-
           echo "Final App Version: $CLEAN_VERSION"
-
           # 同步更新 FyneApp.toml 中的版本号（单行跨平台 Python 脚本）
           python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); open(f,"w").write(re.sub(r"^version\s*=.*", f"version = \"{sys.argv[1]}\"", c, flags=re.M))' "$CLEAN_VERSION"
-
           fyne package -os darwin -name GoOut -icon Icon.png --appVersion "$CLEAN_VERSION"
           zip -r GoOut_macOS_arm64.zip GoOut.app
-
       - name: Upload macOS App
         uses: actions/upload-artifact@v4
         with:
@@ -182,12 +153,9 @@ jobs:
       - name: Organize and Rename Assets
         run: |
           mkdir -p release_assets
-
           cp android-apk/GoOut_Native.apk release_assets/GoOut.apk
-          # cp android-apk/GoOut_Native.aab release_assets/GoOut.aab
-
+          cp android-apk/GoOut_Native.aab release_assets/GoOut.aab
           cp macos-app/*.zip release_assets/
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
