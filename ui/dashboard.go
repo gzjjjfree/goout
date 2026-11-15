@@ -179,6 +179,39 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 				protoEntry.SetText(pr)
 			}
 
+			// 解析嵌套字段: settings (auth, udp), sniffing (enabled)
+			var authVal string = "noauth"
+			var udpVal bool = true
+			var sniffingEnabled bool = true
+
+			if settings, ok := inboundMap["settings"].(map[string]interface{}); ok {
+				if a, ok := settings["auth"].(string); ok { authVal = a }
+				if u, ok := settings["udp"].(bool); ok { udpVal = u }
+			}
+			if sniffing, ok := inboundMap["sniffing"].(map[string]interface{}); ok {
+				if e, ok := sniffing["enabled"].(bool); ok { sniffingEnabled = e }
+			}
+
+			authEntry := widget.NewEntry()
+			authEntry.SetText(authVal)
+			
+			udpCheck := widget.NewCheck("UDP", func(b bool) {
+				settings, _ := inboundMap["settings"].(map[string]interface{})
+				if settings == nil { settings = make(map[string]interface{}); inboundMap["settings"] = settings }
+				settings["udp"] = b
+			})
+			udpCheck.Checked = udpVal
+
+			sniffingCheck := widget.NewCheck("Sniffing", func(b bool) {
+				sniffing, _ := inboundMap["sniffing"].(map[string]interface{})
+				if sniffing == nil {
+					sniffing = map[string]interface{}{"destOverride": []interface{}{"http", "tls"}}
+					inboundMap["sniffing"] = sniffing
+				}
+				sniffing["enabled"] = b
+			})
+			sniffingCheck.Checked = sniffingEnabled
+
 			idx := i
 			delBtn := widget.NewButton("删除此入站", func() {
 				list := getInboundsList()
@@ -196,6 +229,9 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 					&widget.FormItem{Text: "Port", Widget: portEntryItem},
 					&widget.FormItem{Text: "Listen", Widget: listenEntry},
 					&widget.FormItem{Text: "Protocol", Widget: protoEntry},
+					&widget.FormItem{Text: "Auth", Widget: authEntry},
+					&widget.FormItem{Text: "UDP", Widget: udpCheck},
+					&widget.FormItem{Text: "Sniffing", Widget: sniffingCheck},
 				),
 				delBtn,
 				widget.NewSeparator(),
@@ -210,6 +246,11 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 			}
 			listenEntry.OnChanged = func(s string) { inboundMap["listen"] = s }
 			protoEntry.OnChanged = func(s string) { inboundMap["protocol"] = s }
+			authEntry.OnChanged = func(s string) {
+				settings, _ := inboundMap["settings"].(map[string]interface{})
+				if settings == nil { settings = make(map[string]interface{}); inboundMap["settings"] = settings }
+				settings["auth"] = s
+			}
 
 			inboundsContainer.Add(box)
 		}

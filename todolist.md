@@ -1,0 +1,5 @@
+- [x] 初始化 todolist.md 并规划 V2Ray 内存库调用管理器模块
+- [x] 在 go.mod 中引入 github.com/gzjjjfree/v5-result 依赖
+- [x] 编写 core/manager.go 实现内存中启动、停止、Panic Recovery、日志重定向以及并发安全的 V2Ray 管理器
+- [x] 更新 ARCH_NOTES.md 记录架构设计与实现结论
+- [x] 编写测试或调用示例，验证 Fyne UI 中的集成与日志输出
