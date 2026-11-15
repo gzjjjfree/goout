@@ -85,8 +85,11 @@
             {
                 "tag": "cdn-balancer-proxy",
                 "selector": [
-                    "cdn-proxy"
-                ]
+                    "cdn-"
+                ],
+                "strategy": {
+                    "type": "random"
+                }
             }
         ],
         "rules": [

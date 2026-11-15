@@ -120,10 +120,14 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 	}
 	fileBytes, err := os.ReadFile(configPath)
 	var rawCfg map[string]interface{}
-	if err != nil {
-		rawCfg = make(map[string]interface{})
-	} else {
-		_ = json.Unmarshal(fileBytes, &rawCfg)
+	
+	defaultBytes := data.GetDefaultConfigBytes()
+	_ = json.Unmarshal(defaultBytes, &rawCfg)
+
+	if err == nil {
+		if mergedBytes, mergeErr := data.MergeConfigTemplate(defaultBytes, fileBytes); mergeErr == nil {
+			_ = json.Unmarshal(mergedBytes, &rawCfg)
+		}
 	}
 
 	// 1. 主设置 UI 组件
@@ -179,39 +183,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 				protoEntry.SetText(pr)
 			}
 
-			// 解析嵌套字段: settings (auth, udp), sniffing (enabled)
-			var authVal string = "noauth"
-			var udpVal bool = true
-			var sniffingEnabled bool = true
-
-			if settings, ok := inboundMap["settings"].(map[string]interface{}); ok {
-				if a, ok := settings["auth"].(string); ok { authVal = a }
-				if u, ok := settings["udp"].(bool); ok { udpVal = u }
-			}
-			if sniffing, ok := inboundMap["sniffing"].(map[string]interface{}); ok {
-				if e, ok := sniffing["enabled"].(bool); ok { sniffingEnabled = e }
-			}
-
-			authEntry := widget.NewEntry()
-			authEntry.SetText(authVal)
-			
-			udpCheck := widget.NewCheck("UDP", func(b bool) {
-				settings, _ := inboundMap["settings"].(map[string]interface{})
-				if settings == nil { settings = make(map[string]interface{}); inboundMap["settings"] = settings }
-				settings["udp"] = b
-			})
-			udpCheck.Checked = udpVal
-
-			sniffingCheck := widget.NewCheck("Sniffing", func(b bool) {
-				sniffing, _ := inboundMap["sniffing"].(map[string]interface{})
-				if sniffing == nil {
-					sniffing = map[string]interface{}{"destOverride": []interface{}{"http", "tls"}}
-					inboundMap["sniffing"] = sniffing
-				}
-				sniffing["enabled"] = b
-			})
-			sniffingCheck.Checked = sniffingEnabled
-
 			idx := i
 			delBtn := widget.NewButton("删除此入站", func() {
 				list := getInboundsList()
@@ -229,9 +200,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 					&widget.FormItem{Text: "Port", Widget: portEntryItem},
 					&widget.FormItem{Text: "Listen", Widget: listenEntry},
 					&widget.FormItem{Text: "Protocol", Widget: protoEntry},
-					&widget.FormItem{Text: "Auth", Widget: authEntry},
-					&widget.FormItem{Text: "UDP", Widget: udpCheck},
-					&widget.FormItem{Text: "Sniffing", Widget: sniffingCheck},
 				),
 				delBtn,
 				widget.NewSeparator(),
@@ -246,11 +214,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 			}
 			listenEntry.OnChanged = func(s string) { inboundMap["listen"] = s }
 			protoEntry.OnChanged = func(s string) { inboundMap["protocol"] = s }
-			authEntry.OnChanged = func(s string) {
-				settings, _ := inboundMap["settings"].(map[string]interface{})
-				if settings == nil { settings = make(map[string]interface{}); inboundMap["settings"] = settings }
-				settings["auth"] = s
-			}
 
 			inboundsContainer.Add(box)
 		}
@@ -265,14 +228,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 			"port":     1080 + len(list),
 			"listen":   "127.0.0.1",
 			"protocol": "socks",
-			"settings": map[string]interface{}{
-				"auth": "noauth",
-				"udp":  true,
-			},
-			"sniffing": map[string]interface{}{
-				"enabled":      true,
-				"destOverride": []interface{}{"http", "tls"},
-			},
 		}
 		list = append(list, newInbound)
 		rawCfg["inbounds"] = list
@@ -304,6 +259,12 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 				continue
 			}
 
+			if pr, ok := outMap["protocol"].(string); ok {
+				if pr == "freedom" || pr == "blackhole" {
+					continue
+				}
+			}
+
 			tagEntry := widget.NewEntry()
 			if t, ok := outMap["tag"].(string); ok {
 				tagEntry.SetText(t)
@@ -313,8 +274,8 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 				protoEntry.SetText(pr)
 			}
 
-			// 解析嵌套字段: address, port, id, serverName, echDohServer, path
-			var address, id, serverName, echDohServer, path string
+			// 解析嵌套字段: address, port, id, serverName, echDohServer, path, host, userAgent
+			var address, id, serverName, echDohServer, path, host, userAgent string
 			var port int
 
 			if settings, ok := outMap["settings"].(map[string]interface{}); ok {
@@ -338,6 +299,10 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 				}
 				if ws, ok := stream["wsSettings"].(map[string]interface{}); ok {
 					if pth, ok := ws["path"].(string); ok { path = pth }
+					if headers, ok := ws["headers"].(map[string]interface{}); ok {
+						if h, ok := headers["Host"].(string); ok { host = h }
+						if ua, ok := headers["User-Agent"].(string); ok { userAgent = ua }
+					}
 				}
 			}
 
@@ -353,6 +318,10 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 			edEntry.SetText(echDohServer)
 			pathEntry := widget.NewEntry()
 			pathEntry.SetText(path)
+			hostEntry := widget.NewEntry()
+			hostEntry.SetText(host)
+			userAgentEntry := widget.NewEntry()
+			userAgentEntry.SetText(userAgent)
 
 			idx := i
 			delBtn := widget.NewButton("删除此出站", func() {
@@ -375,6 +344,8 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 					&widget.FormItem{Text: "ServerName", Widget: snEntry},
 					&widget.FormItem{Text: "EchDohServer", Widget: edEntry},
 					&widget.FormItem{Text: "Path", Widget: pathEntry},
+					&widget.FormItem{Text: "Host", Widget: hostEntry},
+					&widget.FormItem{Text: "User-Agent", Widget: userAgentEntry},
 				),
 				delBtn,
 				widget.NewSeparator(),
@@ -461,6 +432,24 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 				if ws == nil { ws = make(map[string]interface{}); stream["wsSettings"] = ws }
 				ws["path"] = s
 			}
+			hostEntry.OnChanged = func(s string) {
+				stream, _ := outMap["streamSettings"].(map[string]interface{})
+				if stream == nil { stream = make(map[string]interface{}); outMap["streamSettings"] = stream }
+				ws, _ := stream["wsSettings"].(map[string]interface{})
+				if ws == nil { ws = make(map[string]interface{}); stream["wsSettings"] = ws }
+				headers, _ := ws["headers"].(map[string]interface{})
+				if headers == nil { headers = make(map[string]interface{}); ws["headers"] = headers }
+				headers["Host"] = s
+			}
+			userAgentEntry.OnChanged = func(s string) {
+				stream, _ := outMap["streamSettings"].(map[string]interface{})
+				if stream == nil { stream = make(map[string]interface{}); outMap["streamSettings"] = stream }
+				ws, _ := stream["wsSettings"].(map[string]interface{})
+				if ws == nil { ws = make(map[string]interface{}); stream["wsSettings"] = ws }
+				headers, _ := ws["headers"].(map[string]interface{})
+				if headers == nil { headers = make(map[string]interface{}); ws["headers"] = headers }
+				headers["User-Agent"] = s
+			}
 
 			outboundsContainer.Add(box)
 		}
@@ -483,6 +472,22 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 								"encryption": "none",
 							},
 						},
+					},
+				},
+			},
+			"streamSettings": map[string]interface{}{
+				"network": "ws",
+				"security": "tls",
+				"tlsSettings": map[string]interface{}{
+					"serverName": "",
+					"echDohServer": "",
+					"allowInsecure": false,
+				},
+				"wsSettings": map[string]interface{}{
+					"path": "/ws",
+					"headers": map[string]interface{}{
+						"Host": "",
+						"User-Agent": "",
 					},
 				},
 			},
@@ -509,52 +514,27 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 		routingMap["domainStrategy"] = s
 	}
 
-	balancersContainer := container.NewVBox()
-	var updateBalancersUI func()
-	getBalancersList := func() []interface{} {
-		if routingMap["balancers"] != nil {
-			if list, ok := routingMap["balancers"].([]interface{}); ok {
-				return list
+	// 确保路由中的平衡器固定为 cdn-balancer-proxy
+	hasBalancer := false
+	if lst, ok := routingMap["balancers"].([]interface{}); ok {
+		for _, item := range lst {
+			if bMap, ok := item.(map[string]interface{}); ok {
+				if bMap["tag"] == "cdn-balancer-proxy" {
+					hasBalancer = true
+					break
+				}
 			}
 		}
-		return []interface{}{}
 	}
-
-	updateBalancersUI = func() {
-		balancersContainer.Objects = nil
-		list := getBalancersList()
-		for i, item := range list {
-			bMap, ok := item.(map[string]interface{})
-			if !ok { continue }
-			tagEntry := widget.NewEntry()
-			if t, ok := bMap["tag"].(string); ok { tagEntry.SetText(t) }
-			idx := i
-			delBtn := widget.NewButton("删除此平衡器", func() {
-				lst := getBalancersList()
-				if idx >= 0 && idx < len(lst) {
-					lst = append(lst[:idx], lst[idx+1:]...)
-					routingMap["balancers"] = lst
-					updateBalancersUI()
-				}
-			})
-			tagEntry.OnChanged = func(s string) { bMap["tag"] = s }
-			balancersContainer.Add(container.NewVBox(
-				widget.NewLabel(fmt.Sprintf("平衡器 #%d", i+1)),
-				widget.NewForm(&widget.FormItem{Text: "Tag", Widget: tagEntry}),
-				delBtn,
-				widget.NewSeparator(),
-			))
+	if !hasBalancer {
+		routingMap["balancers"] = []interface{}{
+			map[string]interface{}{
+				"tag": "cdn-balancer-proxy",
+				"selector": []interface{}{"cdn-"},
+				"strategy": map[string]interface{}{"type": "random"},
+			},
 		}
 	}
-	updateBalancersUI()
-
-	addBalancerBtn := widget.NewButton("增加路由(平衡器)", func() {
-		lst := getBalancersList()
-		newB := map[string]interface{}{"tag": "balancer-" + strconv.Itoa(len(lst)+1)}
-		lst = append(lst, newB)
-		routingMap["balancers"] = lst
-		updateBalancersUI()
-	})
 
 	rulesContainer := container.NewVBox()
 	var updateRulesUI func()
@@ -686,8 +666,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 	routingTab := container.NewVBox(
 		widget.NewForm(&widget.FormItem{Text: "DomainStrategy", Widget: domainStrategyEntry}),
 		widget.NewLabel("负载均衡器 (Balancers):"),
-		addBalancerBtn,
-		balancersContainer,
+		widget.NewLabel("平衡器 Tag : cdn-balancer-proxy"),
 		widget.NewSeparator(),
 		widget.NewLabel("分流规则 (Rules):"),
 		addRuleBtn,
@@ -712,6 +691,9 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 		var outBytes []byte
 		var err error
 		if outBytes, err = json.MarshalIndent(rawCfg, "", "    "); err == nil {
+			if mergedBytes, mergeErr := data.MergeConfigTemplate(data.GetDefaultConfigBytes(), outBytes); mergeErr == nil {
+				outBytes = mergedBytes
+			}
 			_ = os.WriteFile(configPath, outBytes, 0644)
 		} else {
 			dialog.ShowError(fmt.Errorf("failed to marshal config: %w", err), w)

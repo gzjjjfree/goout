@@ -164,3 +164,117 @@ func SaveConfig(path string, cfg *Config) error {
 func GetDefaultConfigBytes() []byte {
 	return defaultConfigFile
 }
+
+func MergeConfigTemplate(baseBytes, userBytes []byte) ([]byte, error) {
+	var base, user map[string]interface{}
+	if err := json.Unmarshal(baseBytes, &base); err != nil {
+		return userBytes, err
+	}
+	if err := json.Unmarshal(userBytes, &user); err != nil {
+		return baseBytes, err
+	}
+
+	mergeMap(base, user)
+
+	return json.MarshalIndent(base, "", "    ")
+}
+
+func mergeMap(base, user map[string]interface{}) {
+	if userInbounds, ok := user["inbounds"].([]interface{}); ok {
+		if baseInbounds, ok := base["inbounds"].([]interface{}); ok {
+			mergedInbounds := make([]interface{}, len(userInbounds))
+			for i, uItem := range userInbounds {
+				uMap, ok := uItem.(map[string]interface{})
+				if !ok {
+					mergedInbounds[i] = uItem
+					continue
+				}
+				tag, _ := uMap["tag"].(string)
+				var matchedBaseMap map[string]interface{}
+				for _, bItem := range baseInbounds {
+					if bMap, ok := bItem.(map[string]interface{}); ok {
+						if bTag, _ := bMap["tag"].(string); bTag == tag && tag != "" {
+							matchedBaseMap = bMap
+							break
+						}
+					}
+				}
+				if matchedBaseMap == nil && i < len(baseInbounds) {
+					if bMap, ok := baseInbounds[i].(map[string]interface{}); ok {
+						matchedBaseMap = bMap
+					}
+				}
+
+				if matchedBaseMap != nil {
+					newItem := make(map[string]interface{})
+					for k, v := range matchedBaseMap {
+						newItem[k] = v
+					}
+					// Only update modifiable fields: tag, port, listen, protocol
+					if t, exists := uMap["tag"]; exists { newItem["tag"] = t }
+					if p, exists := uMap["port"]; exists { newItem["port"] = p }
+					if l, exists := uMap["listen"]; exists { newItem["listen"] = l }
+					if pr, exists := uMap["protocol"]; exists { newItem["protocol"] = pr }
+					mergedInbounds[i] = newItem
+				} else {
+					mergedInbounds[i] = uItem
+				}
+			}
+			base["inbounds"] = mergedInbounds
+		} else {
+			base["inbounds"] = user["inbounds"]
+		}
+	}
+
+	if userOutbounds, ok := user["outbounds"].([]interface{}); ok {
+		if baseOutbounds, ok := base["outbounds"].([]interface{}); ok {
+			mergedOutbounds := make([]interface{}, len(userOutbounds))
+			for i, uItem := range userOutbounds {
+				uMap, ok := uItem.(map[string]interface{})
+				if !ok {
+					mergedOutbounds[i] = uItem
+					continue
+				}
+				tag, _ := uMap["tag"].(string)
+				var matchedBaseMap map[string]interface{}
+				for _, bItem := range baseOutbounds {
+					if bMap, ok := bItem.(map[string]interface{}); ok {
+						if bTag, _ := bMap["tag"].(string); bTag == tag && tag != "" {
+							matchedBaseMap = bMap
+							break
+						}
+					}
+				}
+				if matchedBaseMap == nil && i < len(baseOutbounds) {
+					if bMap, ok := baseOutbounds[i].(map[string]interface{}); ok {
+						matchedBaseMap = bMap
+					}
+				}
+
+				if matchedBaseMap != nil {
+					newItem := make(map[string]interface{})
+					for k, v := range matchedBaseMap {
+						newItem[k] = v
+					}
+					if t, exists := uMap["tag"]; exists { newItem["tag"] = t }
+					if pr, exists := uMap["protocol"]; exists { newItem["protocol"] = pr }
+					if us, exists := uMap["settings"]; exists { newItem["settings"] = us }
+					if ust, exists := uMap["streamSettings"]; exists { newItem["streamSettings"] = ust }
+					if mux, exists := uMap["mux"]; exists { newItem["mux"] = mux }
+					mergedOutbounds[i] = newItem
+				} else {
+					mergedOutbounds[i] = uItem
+				}
+			}
+			base["outbounds"] = mergedOutbounds
+		} else {
+			base["outbounds"] = user["outbounds"]
+		}
+	}
+
+	for k, v := range user {
+		if k != "inbounds" && k != "outbounds" {
+			base[k] = v
+		}
+	}
+}

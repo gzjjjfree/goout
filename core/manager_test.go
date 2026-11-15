@@ -13,6 +13,11 @@ func TestV2rayManagerLifecycle(t *testing.T) {
 		logCalled = true
 		t.Logf("[V2Ray Log] %s", msg)
 	})
+	defer func() {
+		mgr.mu.Lock()
+		mgr.onLog = nil
+		mgr.mu.Unlock()
+	}()
 
 	if mgr.IsRunning() {
 		t.Errorf("Expected manager to not be running initially")
@@ -27,6 +32,12 @@ func TestV2rayManagerLifecycle(t *testing.T) {
 
 	if mgr.IsRunning() {
 		t.Errorf("Expected manager to not be running after failed start")
+	}
+
+	// 测试 CheckConfig
+	checkErr := mgr.CheckConfig(invalidConfig)
+	if checkErr == nil {
+		t.Errorf("Expected error when checking invalid config, got nil")
 	}
 
 	t.Logf("Log callback successfully verified, received logs: %v", logCalled)
@@ -44,6 +55,16 @@ func TestV2rayManagerWithDefaultConfigAndGeosite(t *testing.T) {
 	mgr := GetManager(func(msg string) {
 		t.Logf("[V2Ray Log] %s", msg)
 	})
+	defer func() {
+		mgr.mu.Lock()
+		mgr.onLog = nil
+		mgr.mu.Unlock()
+	}()
+
+	// 测试 CheckConfig (合法默认配置)
+	if checkErr := mgr.CheckConfig(configBytes); checkErr != nil {
+		t.Errorf("Failed to check valid default config: %v", checkErr)
+	}
 
 	err = mgr.Start(configBytes)
 	if err != nil {

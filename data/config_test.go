@@ -1,6 +1,7 @@
 package data
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,5 +35,45 @@ func TestConfigSaveAndLoad(t *testing.T) {
 
 	if loaded.ServerPort != 9999 {
 		t.Errorf("expected ServerPort 9999, got %d", loaded.ServerPort)
+	}
+}
+
+func TestMergeConfigTemplate(t *testing.T) {
+	baseBytes := GetDefaultConfigBytes()
+	userJSON := []byte(`{
+		"inbounds": [
+			{
+				"tag": "gz",
+				"port": 10819,
+				"listen": "127.0.0.1",
+				"protocol": "socks"
+			}
+		]
+	}`)
+
+	merged, err := MergeConfigTemplate(baseBytes, userJSON)
+	if err != nil {
+		t.Fatalf("failed to merge config template: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(merged, &parsed); err != nil {
+		t.Fatalf("failed to parse merged json: %v", err)
+	}
+
+	inbounds, ok := parsed["inbounds"].([]interface{})
+	if !ok || len(inbounds) == 0 {
+		t.Fatalf("inbounds missing or invalid")
+	}
+
+	ib := inbounds[0].(map[string]interface{})
+	if ib["port"] != float64(10819) {
+		t.Errorf("expected port 10819, got %v", ib["port"])
+	}
+	if ib["sniffing"] == nil {
+		t.Errorf("expected sniffing field to be preserved from template")
+	}
+	if ib["settings"] == nil {
+		t.Errorf("expected settings field to be preserved from template")
 	}
 }

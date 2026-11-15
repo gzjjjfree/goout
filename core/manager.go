@@ -5,14 +5,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime/debug"
 	"strings"
 	"sync"
 
+	"github.com/gzjjjfree/goout/data"
 	v2core "github.com/gzjjjfree/v5-result"
 	v2log "github.com/gzjjjfree/v5-result/common/log"
 	_ "github.com/gzjjjfree/v5-result/main/distro/all"
-	"github.com/gzjjjfree/goout/data"
 )
 
 var (
@@ -173,6 +174,7 @@ func (m *V2rayManager) GetLogs() []string {
 
 // Start 在内存中启动 V2Ray 实例（带 Panic Recovery 与并发保护）
 func (m *V2rayManager) Start(configJSON []byte) (err error) {
+	fmt.Println("Starting V2Ray core in-memory instance...")
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -223,12 +225,11 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	return nil
 }
 
-// Stop 优雅关闭 V2Ray 内存实例并释放资源
+// Stop 优雅关闭 V2Ray 内存实例并同步释放资源（确保端口释放）
 func (m *V2rayManager) Stop() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if !m.isRunning {
+		m.mu.Unlock()
 		return nil
 	}
 
@@ -236,23 +237,29 @@ func (m *V2rayManager) Stop() error {
 		m.onLog("Stopping V2Ray core in-memory instance...")
 	}
 
-	var closeErr error
-	if m.instance != nil {
-		closeErr = m.instance.Close()
-	}
-
 	if m.cancel != nil {
 		m.cancel()
 	}
 
+	inst := m.instance
 	m.instance = nil
 	m.isRunning = false
+	m.mu.Unlock() // 释放锁，允许其他操作进入
+
+	if inst != nil {
+		// 同步关闭实例，确保底层的 TCP 监听端口被操作系统彻底回收
+		// 如果担心极端情况下阻塞，可以用带超时的 channel 包裹，但同步 Close 能从根本上解决再次启动端口被占用的问题
+		err := inst.Close()
+		if err != nil && m.onLog != nil {
+			m.onLog(fmt.Sprintf("V2Ray instance close warning: %v", err))
+		}
+	}
 
 	if m.onLog != nil {
 		m.onLog("V2Ray core in-memory instance stopped.")
 	}
 
-	return closeErr
+	return nil
 }
 
 // IsRunning 检查 V2Ray 内存实例是否在运行
@@ -262,9 +269,37 @@ func (m *V2rayManager) IsRunning() bool {
 	return m.isRunning
 }
 
-// CheckConfig 使用 V2Ray 核心检查/验证配置是否合法
+// CheckConfig 使用 V2Ray 核心的 -test 参数检查/验证配置是否合法
 func (m *V2rayManager) CheckConfig(configJSON []byte) error {
+	fmt.Println("Checking V2Ray configuration...")
 	data.EnsureGeositeDat()
+
+	// 写入临时配置文件用于 -test 验证
+	tmpFile, err := os.CreateTemp("", "v2ray-config-*.json")
+	if err != nil {
+		return m.checkConfigInMemory(configJSON)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmpFile.Write(configJSON); err != nil {
+		_ = tmpFile.Close()
+		return m.checkConfigInMemory(configJSON)
+	}
+	_ = tmpFile.Close()
+
+	cmd := exec.Command("v2ray", "test", "-config", tmpPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if memErr := m.checkConfigInMemory(configJSON); memErr == nil {
+			return nil
+		}
+		return fmt.Errorf("v2ray config test failed: %w, output: %s", err, string(output))
+	}
+	return nil
+}
+
+func (m *V2rayManager) checkConfigInMemory(configJSON []byte) error {
 	instance, err := v2core.StartInstance("json", configJSON)
 	if err != nil {
 		return fmt.Errorf("v2ray config check failed: %w", err)
