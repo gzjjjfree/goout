@@ -1,0 +1,15 @@
+jsonData*
+bundletool*
+*.aab
+*.apk
+*.apks
+*.jks
+*.sh
+
+AGENTS.md
+ARCH_NOTES.md
+.roo/
+gooout
+todolist.dm
+libv2ray.so
+venv
