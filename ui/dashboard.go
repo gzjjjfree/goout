@@ -29,15 +29,18 @@ func SetupDashboard(w fyne.Window) {
 		}
 	}
 
-	logArea := widget.NewMultiLineEntry()
-	logArea.Wrapping = fyne.TextWrapWord
-	logArea.SetText("GoOut 初始化成功 (内存 V2Ray 核心)。\n准备启动代理...")
+	logText := "GoOut 初始化成功 (内存 V2Ray 核心)。\n准备启动代理..."
+	logLabel := widget.NewLabel(logText)
+	logLabel.Wrapping = fyne.TextWrapWord
+
+	scroll := container.NewVScroll(logLabel)
 
 	// Callback for real-time log updates with fyne.Do (UI Thread Safety)
 	onLog := func(msg string) {
 		fyne.Do(func() {
-			current := logArea.Text
-			logArea.SetText(current + "\n" + msg)
+			logText += "\n" + msg
+			logLabel.SetText(logText)
+			scroll.ScrollToBottom()
 		})
 	}
 
@@ -103,7 +106,7 @@ func SetupDashboard(w fyne.Window) {
 		widget.NewLabel("日志:"),
 	)
 
-	content := container.NewBorder(topContent, nil, nil, nil, container.NewVScroll(logArea))
+	content := container.NewBorder(topContent, nil, nil, nil, scroll)
 
 	w.SetContent(content)
 	w.Resize(fyne.NewSize(450, 650))
@@ -210,6 +213,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 
 			inboundsContainer.Add(box)
 		}
+		inboundsContainer.Refresh()
 	}
 	updateInboundsUI()
 
@@ -220,6 +224,14 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 			"port":     1080 + len(list),
 			"listen":   "127.0.0.1",
 			"protocol": "socks",
+			"settings": map[string]interface{}{
+				"auth": "noauth",
+				"udp":  true,
+			},
+			"sniffing": map[string]interface{}{
+				"enabled":      true,
+				"destOverride": []interface{}{"http", "tls"},
+			},
 		}
 		list = append(list, newInbound)
 		rawCfg["inbounds"] = list
