@@ -9,8 +9,8 @@ bundletool*
 AGENTS.md
 ARCH_NOTES.md
 .roo/
-gooout
-todolist.dm
+goout
+todolist.md
 libv2ray.so
 venv
 config_save.json
