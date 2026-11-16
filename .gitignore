@@ -17,3 +17,9 @@ config_save.json
 v5-result-linux
 ./geosite.dat
 ./result.json
+./core/statusbar/geosite.dat
+./core/statusbar/result.json
+./core/data/geosite.dat
+./core/data/result.json
+./core/geosite.dat
+./core/result.json

@@ -36,115 +36,50 @@ func EnsureWintunDLL() {
 	}
 }
 
-// EnsureGeositeDat 确保 geosite.dat 在所有可能的可写存储目录、工作目录及可执行目录下的 data/geosite.dat 及根目录下可用，并设置 v2ray.location.asset 环境变量（若已存在则跳过）
+// EnsureGeositeDat 确保 geosite.dat 在运行时写入且仅写入与运行文件同目录下，并设置 v2ray.location.asset 环境变量
 func EnsureGeositeDat() {
 	if len(embeddedGeosite) == 0 {
 		return
 	}
 
-	dirs := []string{}
-	writable := getWritableDir()
-	if writable != "" {
-		dirs = append(dirs, writable)
-		dirs = append(dirs, filepath.Join(writable, "data"))
-	}
-	if wd, err := os.Getwd(); err == nil && wd != "" {
-		dirs = append(dirs, wd)
-		dirs = append(dirs, filepath.Join(wd, "data"))
-	}
+	targetDir := ""
 	if exe, err := os.Executable(); err == nil && exe != "" {
-		dirs = append(dirs, filepath.Dir(exe))
-		dirs = append(dirs, filepath.Join(filepath.Dir(exe), "data"))
+		targetDir = filepath.Dir(exe)
+	} else if wd, err := os.Getwd(); err == nil && wd != "" {
+		targetDir = wd
+	}
+	if targetDir == "" {
+		targetDir = "."
 	}
 
-	var primaryDir string
-	for _, dir := range dirs {
-		if dir == "" {
-			continue
-		}
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			continue
-		}
-		p := filepath.Join(dir, "geosite.dat")
-		if _, err := os.Stat(p); os.IsNotExist(err) {
-			if err := os.WriteFile(p, embeddedGeosite, 0644); err == nil {
-				if primaryDir == "" && (strings.HasSuffix(dir, "data") || filepath.Base(dir) == "data") {
-					primaryDir = dir
-				}
-			}
-		} else {
-			if primaryDir == "" && (strings.HasSuffix(dir, "data") || filepath.Base(dir) == "data") {
-				primaryDir = dir
-			}
-		}
-	}
-	if primaryDir == "" && writable != "" {
-		primaryDir = filepath.Join(writable, "data")
-		_ = os.MkdirAll(primaryDir, 0755)
-		_ = os.WriteFile(filepath.Join(primaryDir, "geosite.dat"), embeddedGeosite, 0644)
+	if err := os.MkdirAll(targetDir, 0755); err == nil {
+		p := filepath.Join(targetDir, "geosite.dat")
+		_ = os.WriteFile(p, embeddedGeosite, 0644)
 	}
 
-	// 同时在当前相对路径及 data/geosite.dat 写入一份（若不存在）
-	if _, err := os.Stat("geosite.dat"); os.IsNotExist(err) {
-		_ = os.WriteFile("geosite.dat", embeddedGeosite, 0644)
-	}
-	if _, err := os.Stat(filepath.Join("data", "geosite.dat")); os.IsNotExist(err) {
-		_ = os.MkdirAll("data", 0755)
-		_ = os.WriteFile(filepath.Join("data", "geosite.dat"), embeddedGeosite, 0644)
-	}
-
-	if primaryDir != "" {
-		_ = os.Setenv("v2ray.location.asset", primaryDir)
-		_ = os.Setenv("V2RAY_LOCATION_ASSET", primaryDir)
-	} else if writable != "" {
-		dataDir := filepath.Join(writable, "data")
-		_ = os.MkdirAll(dataDir, 0755)
-		_ = os.Setenv("v2ray.location.asset", dataDir)
-		_ = os.Setenv("V2RAY_LOCATION_ASSET", dataDir)
-	}
+	_ = os.Setenv("v2ray.location.asset", targetDir)
+	_ = os.Setenv("V2RAY_LOCATION_ASSET", targetDir)
 }
 
-// EnsureResultJSON 确保 result.json 在所有可能的可写存储目录、工作目录及可执行目录下的 data/result.json 及根目录下可用（若已存在则跳过）
+// EnsureResultJSON 确保 result.json 在运行时写入且仅写入与运行文件同目录下
 func EnsureResultJSON() {
 	if len(embeddedResultJSON) == 0 {
 		return
 	}
 
-	dirs := []string{}
-	writable := getWritableDir()
-	if writable != "" {
-		dirs = append(dirs, writable)
-		dirs = append(dirs, filepath.Join(writable, "data"))
-	}
-	if wd, err := os.Getwd(); err == nil && wd != "" {
-		dirs = append(dirs, wd)
-		dirs = append(dirs, filepath.Join(wd, "data"))
-	}
+	targetDir := ""
 	if exe, err := os.Executable(); err == nil && exe != "" {
-		dirs = append(dirs, filepath.Dir(exe))
-		dirs = append(dirs, filepath.Join(filepath.Dir(exe), "data"))
+		targetDir = filepath.Dir(exe)
+	} else if wd, err := os.Getwd(); err == nil && wd != "" {
+		targetDir = wd
+	}
+	if targetDir == "" {
+		targetDir = "."
 	}
 
-	for _, dir := range dirs {
-		if dir == "" {
-			continue
-		}
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			continue
-		}
-		p := filepath.Join(dir, "result.json")
-		if _, err := os.Stat(p); os.IsNotExist(err) {
-			_ = os.WriteFile(p, embeddedResultJSON, 0644)
-		}
-	}
-
-	// 同时在当前相对路径及 data/result.json 写入一份（若不存在）
-	if _, err := os.Stat("result.json"); os.IsNotExist(err) {
-		_ = os.WriteFile("result.json", embeddedResultJSON, 0644)
-	}
-	if _, err := os.Stat(filepath.Join("data", "result.json")); os.IsNotExist(err) {
-		_ = os.MkdirAll("data", 0755)
-		_ = os.WriteFile(filepath.Join("data", "result.json"), embeddedResultJSON, 0644)
+	if err := os.MkdirAll(targetDir, 0755); err == nil {
+		p := filepath.Join(targetDir, "result.json")
+		_ = os.WriteFile(p, embeddedResultJSON, 0644)
 	}
 }
 
