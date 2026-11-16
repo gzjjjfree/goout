@@ -8,6 +8,10 @@ import (
 	"github.com/gzjjjfree/goout/jni"
 )
 
+var (
+	androidFD int = -1
+)
+
 // StartVPN initializes Android VpnService TUN interface and tun2socks packet forwarding.
 func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.mu.Lock()
@@ -19,14 +23,21 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 
 	log.Printf("[Android-VPN] Starting VpnService TUN tunnel: IP=%s, Gateway=%s, SOCKS=%s", v.tunIP, v.gateway, socksAddr)
 
-	simulatedFD := -1 // In actual Android runtime, obtained from VpnService.Builder().establish().getFd()
-	log.Printf("[Android-VPN] Calling jni.StartTun2Socks with simulatedFD=%d, tunIP=%s, gateway=%s, socksAddr=%s", simulatedFD, v.tunIP, v.gateway, socksAddr)
+	simulatedFD := androidFD
+	log.Printf("[Android-VPN] Calling jni.StartTun2Socks with FD=%d, tunIP=%s, gateway=%s, socksAddr=%s", simulatedFD, v.tunIP, v.gateway, socksAddr)
 	jni.StartTun2Socks(simulatedFD, v.tunIP, v.gateway, socksAddr)
 	log.Printf("[Android-VPN] jni.StartTun2Socks invoked successfully.")
 
 	v.active = true
 	log.Printf("[Android-VPN] VPN started successfully, active=true")
 	return nil
+}
+
+// StartVPNWithFD allows Android Java/Kotlin host to pass the real VpnService file descriptor (FD) once established.
+//export StartVPNWithFD
+func StartVPNWithFD(fd int, socksAddr string) {
+	log.Printf("[Android-VPN] Received real VpnService FD=%d from Android host", fd)
+	androidFD = fd
 }
 
 // StopVPN stops Android VpnService TUN tunnel.
@@ -39,6 +50,7 @@ func (v *VPNServiceManager) StopVPN() error {
 	}
 
 	log.Println("[Android-VPN] Stopping Android VpnService TUN tunnel")
+	androidFD = -1
 	v.active = false
 	return nil
 }

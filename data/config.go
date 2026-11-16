@@ -14,6 +14,21 @@ var defaultConfigFile []byte
 //go:embed geosite.dat
 var embeddedGeosite []byte
 
+//go:embed wintun.dll
+var embeddedWintunDLL []byte
+
+// EnsureWintunDLL 确保 wintun.dll 在可执行文件同级目录及工作目录下可用
+func EnsureWintunDLL() {
+	if len(embeddedWintunDLL) == 0 {
+		return
+	}
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		p := filepath.Join(filepath.Dir(exe), "wintun.dll")
+		_ = os.WriteFile(p, embeddedWintunDLL, 0644)
+	}
+	_ = os.WriteFile("wintun.dll", embeddedWintunDLL, 0644)
+}
+
 // EnsureGeositeDat 确保 geosite.dat 在所有可能的可写存储目录、工作目录及可执行目录下可用，并设置 v2ray.location.asset 环境变量
 func EnsureGeositeDat() {
 	if len(embeddedGeosite) == 0 {

@@ -5,12 +5,17 @@ package service
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 
 	"github.com/gzjjjfree/goout/jni"
 )
 
-// StartVPN initializes macOS UTUN interface and routing table for global proxy.
+var (
+	utunFile *os.File
+)
+
+// StartVPN initializes macOS UTUN interface and routing table for global proxy with real file descriptor.
 func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -21,12 +26,25 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 
 	log.Printf("[macOS-VPN] Starting macOS UTUN interface & routing table: IP=%s, Gateway=%s, SOCKS=%s", v.tunIP, v.gateway, socksAddr)
 
+	// Open /dev/utun to get a real TUN file descriptor
+	file, err := os.OpenFile("/dev/utun", os.O_RDWR, 0)
+	if err != nil {
+		log.Printf("[macOS-VPN] Failed to open /dev/utun: %v (requires root/administrative privileges or simulation mode)", err)
+	} else {
+		utunFile = file
+	}
+
+	simulatedFD := -1
+	if utunFile != nil {
+		simulatedFD = int(utunFile.Fd())
+	}
+
 	// Configure macOS routing / ifconfig for UTUN interface
 	ifconfigCmdStr := fmt.Sprintf("ifconfig utun3 %s %s up", v.tunIP, v.gateway)
 	log.Printf("[macOS-VPN] Executing command: %s", ifconfigCmdStr)
 	cmdIfconfig := exec.Command("ifconfig", "utun3", v.tunIP, v.gateway, "up")
 	if err := cmdIfconfig.Run(); err != nil {
-		log.Printf("[macOS-VPN] ifconfig setup notice (requires administrative privileges or simulation mode): %v", err)
+		log.Printf("[macOS-VPN] ifconfig setup notice: %v", err)
 	} else {
 		log.Printf("[macOS-VPN] ifconfig executed successfully.")
 	}
@@ -40,8 +58,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		log.Printf("[macOS-VPN] route added successfully.")
 	}
 
-	simulatedFD := -1 // macOS UTUN file descriptor integration point
-	log.Printf("[macOS-VPN] Calling jni.StartTun2Socks with simulatedFD=%d, tunIP=%s, gateway=%s, socksAddr=%s", simulatedFD, v.tunIP, v.gateway, socksAddr)
+	log.Printf("[macOS-VPN] Calling jni.StartTun2Socks with real FD=%d, tunIP=%s, gateway=%s, socksAddr=%s", simulatedFD, v.tunIP, v.gateway, socksAddr)
 	jni.StartTun2Socks(simulatedFD, v.tunIP, v.gateway, socksAddr)
 	log.Printf("[macOS-VPN] jni.StartTun2Socks invoked successfully.")
 
@@ -60,6 +77,11 @@ func (v *VPNServiceManager) StopVPN() error {
 	}
 
 	log.Println("[macOS-VPN] Stopping macOS UTUN tunnel & restoring default routing")
+
+	if utunFile != nil {
+		_ = utunFile.Close()
+		utunFile = nil
+	}
 
 	cmdRoute := exec.Command("route", "delete", "default")
 	if err := cmdRoute.Run(); err != nil {
