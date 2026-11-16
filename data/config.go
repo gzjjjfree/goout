@@ -61,7 +61,7 @@ func EnsureGeositeDat() {
 	_ = os.Setenv("V2RAY_LOCATION_ASSET", targetDir)
 }
 
-// EnsureResultJSON 确保 result.json 在运行时写入且仅写入与运行文件同目录下
+// EnsureResultJSON 确保 result.json 在运行时写入到与运行文件同目录下的 result/result.json 中
 func EnsureResultJSON() {
 	if len(embeddedResultJSON) == 0 {
 		return
@@ -77,8 +77,9 @@ func EnsureResultJSON() {
 		targetDir = "."
 	}
 
-	if err := os.MkdirAll(targetDir, 0755); err == nil {
-		p := filepath.Join(targetDir, "result.json")
+	resultDir := filepath.Join(targetDir, "result")
+	if err := os.MkdirAll(resultDir, 0755); err == nil {
+		p := filepath.Join(resultDir, "result.json")
 		_ = os.WriteFile(p, embeddedResultJSON, 0644)
 	}
 }
