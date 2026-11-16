@@ -17,6 +17,11 @@ var (
 	wintunSession uintptr
 	wintunAdapter uintptr
 	wintunRunning bool
+
+	// Wintun transmit buffer and send procedure used to write packets back into the virtual adapter.
+	wintunTransmitBuffer unsafe.Pointer
+	wintunTransmitSize   uint32
+	sendPacketProc       *syscall.Proc
 )
 
 var (
@@ -74,7 +79,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 					log.Println("[Windows-VPN] Wintun session started successfully.")
 
 					// Start Wintun packet processing loop
-					go startWintunPacketLoop(session, socksAddr)
+					go startWintunPacketLoop(session, v.tunIP, v.gateway, socksAddr)
 				}
 			}
 		}
@@ -103,7 +108,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	return nil
 }
 
-func startWintunPacketLoop(session uintptr, socksAddr string) {
+func startWintunPacketLoop(session uintptr, tunIP, gateway, socksAddr string) {
 	log.Printf("[Wintun-Tunnel] Starting Wintun packet reading loop for SOCKS5 proxy: %s", socksAddr)
 	dll, err := syscall.LoadDLL("wintun.dll")
 	if err != nil {
@@ -114,9 +119,11 @@ func startWintunPacketLoop(session uintptr, socksAddr string) {
 
 	getReadWaitEvent, _ := dll.FindProc("WintunGetReadWaitEvent")
 	receivePacket, _ := dll.FindProc("WintunReceivePacket")
-	releaseReceivePacket, _ := dll.FindProc("WintunReleaseReceivePacket")
+	receiveReleasePacket, _ := dll.FindProc("WintunReleaseReceivePacket")
+	getTransmitBuffer, _ := dll.FindProc("WintunGetTransmitBuffer")
+	sendPacket, _ := dll.FindProc("WintunSendPacket")
 
-	if getReadWaitEvent == nil || receivePacket == nil || releaseReceivePacket == nil {
+	if getReadWaitEvent == nil || receivePacket == nil || receiveReleasePacket == nil {
 		log.Println("[Wintun-Tunnel] Failed to find required Wintun packet procedures")
 		return
 	}
@@ -125,6 +132,20 @@ func startWintunPacketLoop(session uintptr, socksAddr string) {
 	if readWaitEvent == 0 {
 		log.Println("[Wintun-Tunnel] Failed to get Wintun read wait event")
 		return
+	}
+
+	// Acquire the transmit buffer so we can write packets back into the adapter.
+	if getTransmitBuffer != nil && sendPacket != nil {
+		var transmitSize uint32
+		transmitPtr, _, _ := getTransmitBuffer.Call(session, uintptr(unsafe.Pointer(&transmitSize)))
+		if transmitPtr != 0 && transmitSize > 0 {
+			wintunTransmitBuffer = unsafe.Pointer(transmitPtr)
+			wintunTransmitSize = transmitSize
+			sendPacketProc = sendPacket
+			log.Printf("[Wintun-Tunnel] Wintun transmit buffer ready (size=%d)", transmitSize)
+		} else {
+			log.Println("[Wintun-Tunnel] Failed to acquire Wintun transmit buffer; send path disabled")
+		}
 	}
 
 	for wintunRunning {
@@ -140,14 +161,31 @@ func startWintunPacketLoop(session uintptr, socksAddr string) {
 		packetPtr, _, _ := receivePacket.Call(session, uintptr(unsafe.Pointer(&packetSize)))
 		if packetPtr != 0 {
 			if packetSize > 0 {
-				// Packet read successfully from Wintun ring buffer
-				// packetBytes := unsafe.Slice((*byte)(unsafe.Pointer(packetPtr)), packetSize)
-				// Forward packet through proxy / tun2socks logic if needed
+				// Clone the payload because releasing invalidates the ring buffer memory.
+				copied := make([]byte, packetSize)
+				copy(copied, unsafe.Slice((*byte)(unsafe.Pointer(packetPtr)), packetSize))
+				go processWintunPacket(session, tunIP, gateway, socksAddr, copied)
 			}
-			releaseReceivePacket.Call(session, packetPtr)
+			receiveReleasePacket.Call(session, packetPtr)
 		}
 	}
 	log.Println("[Wintun-Tunnel] Wintun packet loop stopped.")
+}
+
+// processWintunPacket forwards a cloned IP packet through the shared forwarding engine and
+// writes any ICMP reply back into the Wintun transmit buffer.
+func processWintunPacket(session uintptr, tunIP, gateway, socksAddr string, packet []byte) {
+	jni.ForwardPacket(packet, tunIP, gateway, socksAddr, func(reply []byte) {
+		if wintunTransmitBuffer == nil || sendPacketProc == nil {
+			return
+		}
+		dst := unsafe.Slice((*byte)(wintunTransmitBuffer), wintunTransmitSize)
+		if len(reply) > len(dst) {
+			return
+		}
+		copy(dst, reply)
+		sendPacketProc.Call(session, uintptr(unsafe.Pointer(&dst[0])))
+	})
 }
 
 // StopVPN stops Windows Wintun tunnel and restores system routing.
