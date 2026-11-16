@@ -15,3 +15,5 @@ libv2ray.so
 venv
 config_save.json
 v5-result-linux
+./geosite.dat
+./result.json

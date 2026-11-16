@@ -183,8 +183,9 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 		return fmt.Errorf("v2ray core instance is already running")
 	}
 
-	// 确保 geosite.dat 资产文件已通过 go:embed 释放到运行目录
+	// 确保 geosite.dat 资产文件及 result.json 已通过 go:embed 释放到运行目录
 	data.EnsureGeositeDat()
+	data.EnsureResultJSON()
 
 	// Panic Recovery 保护：防止底层核心崩溃导致整个 Fyne UI 进程闪退
 	defer func() {
@@ -274,6 +275,7 @@ func (m *V2rayManager) IsRunning() bool {
 func (m *V2rayManager) CheckConfig(configJSON []byte) error {
 	fmt.Println("Checking V2Ray configuration...")
 	data.EnsureGeositeDat()
+	data.EnsureResultJSON()
 
 	// 写入临时配置文件用于 -test 验证
 	tmpFile, err := os.CreateTemp("", "v2ray-config-*.json")
