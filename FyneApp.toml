@@ -2,7 +2,7 @@
 name = "GoOut"
 icon = "Icon.png"
 bundle = "com.gzjjjfree.goout"
-version = "1.0.0"
+version = "1.1.36"
 build = 1
 
 [Android]

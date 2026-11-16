@@ -174,7 +174,6 @@ func (m *V2rayManager) GetLogs() []string {
 
 // Start 在内存中启动 V2Ray 实例（带 Panic Recovery 与并发保护）
 func (m *V2rayManager) Start(configJSON []byte) (err error) {
-	fmt.Println("Starting V2Ray core in-memory instance...")
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

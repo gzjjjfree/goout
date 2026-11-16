@@ -167,7 +167,7 @@ jobs:
             CLEAN_VERSION="1.0.0"
           fi
           python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); open(f,"w").write(re.sub(r"^version\s*=.*", f"version = \"{sys.argv[1]}\"", c, flags=re.M))' "$CLEAN_VERSION"
-          go build -ldflags="-H windowsgui" -o GoOut.exe main.go
+          go build -ldflags="-H windowsgui -X github.com/gzjjjfree/goout/ui.Version=$CLEAN_VERSION" -o GoOut.exe main.go
 
       - name: Upload Windows Executable
         uses: actions/upload-artifact@v4
@@ -201,10 +201,10 @@ jobs:
             RAW_VERSION=$(git describe --tags --always 2>/dev/null || echo "1.0.0")
           fi
           CLEAN_VERSION=$(echo "$RAW_VERSION" | sed 's/^v//' | sed 's/-.*//')
-          if [ -z "$CLEAN_VERSION" ] || ! [[ "$CLEans_VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then
+          if [ -z "$CLEAN_VERSION" ] || ! [[ "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then
             CLEAN_VERSION="1.0.0"
           fi
-          go build -o GoOut_linux_amd64 main.go
+          go build -ldflags="-X github.com/gzjjjfree/goout/ui.Version=$CLEAN_VERSION" -o GoOut_linux_amd64 main.go
 
       - name: Upload Linux Binary
         uses: actions/upload-artifact@v4

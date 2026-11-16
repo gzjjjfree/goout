@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"github.com/gzjjjfree/goout/data"
 	"github.com/gzjjjfree/goout/service"
 )
+
+var Version = "1.0.0"
 
 func InspectNativeLibs() {
 
@@ -65,17 +68,22 @@ func SetupDashboard(w fyne.Window) {
 			}
 
 			socksAddr := fmt.Sprintf("127.0.0.1:%d", cfg.SocksPort)
+			log.Printf("[Dashboard] Attempting to start V2Ray with config: %s, SOCKS addr: %s", cfg.V2RayConfigPath, socksAddr)
 			err = v2rayMgr.Start(configBytes)
 			if err != nil {
+				log.Printf("[Dashboard] V2Ray start failed: %v", err)
 				dialog.ShowError(err, w)
 				return
 			}
+			log.Printf("[Dashboard] V2Ray core started successfully. Now starting VPN manager...")
 			err = vpnMgr.StartVPN(socksAddr)
 			if err != nil {
+				log.Printf("[Dashboard] VPN start failed: %v", err)
 				_ = v2rayMgr.Stop()
 				dialog.ShowError(err, w)
 				return
 			}
+			log.Printf("[Dashboard] VPN started successfully.")
 			statusLabel.SetText("状态: 运行中")
 			toggleBtn.SetText("停止代理与 VPN")
 		} else {
@@ -91,11 +99,19 @@ func SetupDashboard(w fyne.Window) {
 		showSettingsDialog(w, cfg)
 	})
 
-	appVersion := "1.0.0"
+	clearBtn := widget.NewButton("清除日志", func() {
+		logText = ""
+		logLabel.SetText("")
+	})
+
+	appVersion := Version
 	if app := fyne.CurrentApp(); app != nil {
-		if ver := app.Metadata().Version; ver != "" {
+		if ver := app.Metadata().Version; ver != "" && ver != "0.0.0" {
 			appVersion = ver
 		}
+	}
+	if appVersion == "" || appVersion == "0.0.0" {
+		appVersion = Version
 	}
 
 	topContent := container.NewVBox(
@@ -103,7 +119,7 @@ func SetupDashboard(w fyne.Window) {
 		statusLabel,
 		container.NewHBox(toggleBtn, configBtn),
 		widget.NewSeparator(),
-		widget.NewLabel("日志:"),
+		container.NewBorder(nil, nil, widget.NewLabel("日志:"), clearBtn, nil),
 	)
 
 	content := container.NewBorder(topContent, nil, nil, nil, scroll)

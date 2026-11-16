@@ -20,9 +20,12 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	log.Printf("[Android-VPN] Starting VpnService TUN tunnel: IP=%s, Gateway=%s, SOCKS=%s", v.tunIP, v.gateway, socksAddr)
 
 	simulatedFD := -1 // In actual Android runtime, obtained from VpnService.Builder().establish().getFd()
+	log.Printf("[Android-VPN] Calling jni.StartTun2Socks with simulatedFD=%d, tunIP=%s, gateway=%s, socksAddr=%s", simulatedFD, v.tunIP, v.gateway, socksAddr)
 	jni.StartTun2Socks(simulatedFD, v.tunIP, v.gateway, socksAddr)
+	log.Printf("[Android-VPN] jni.StartTun2Socks invoked successfully.")
 
 	v.active = true
+	log.Printf("[Android-VPN] VPN started successfully, active=true")
 	return nil
 }
 
