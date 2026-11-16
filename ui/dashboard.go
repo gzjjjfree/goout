@@ -51,48 +51,107 @@ func SetupDashboard(w fyne.Window) {
 	vpnMgr := service.NewVPNServiceManager(cfg.TunIP, "10.0.0.1")
 
 	statusLabel := widget.NewLabel("状态: 已停止")
-	var toggleBtn *widget.Button
+	var v2rayBtn *widget.Button
+	var vpnBtn *widget.Button
 
-	toggleBtn = widget.NewButton("启动代理与 VPN", func() {
-		if !v2rayMgr.IsRunning() {
-			// 读取 V2Ray 配置文件字节流并在内存中启动
-			configBytes, err := os.ReadFile(cfg.V2RayConfigPath)
-			if err != nil {
-				// 如果配置文件不存在，自动保存默认配置并重新读取
-				_ = data.SaveConfig(cfg.V2RayConfigPath, cfg)
-				configBytes, err = os.ReadFile(cfg.V2RayConfigPath)
+	updateStatus := func() {
+		v2Run := v2rayMgr.IsRunning()
+		vpnRun := vpnMgr.IsRunning()
+		if v2Run && vpnRun {
+			statusLabel.SetText("状态: V2Ray 运行中 | VPN 运行中")
+			v2rayBtn.SetText("停止 V2Ray 核心")
+			vpnBtn.SetText("停止 VPN")
+		} else if v2Run {
+			statusLabel.SetText("状态: V2Ray 运行中 | VPN 已停止")
+			v2rayBtn.SetText("停止 V2Ray 核心")
+			vpnBtn.SetText("启动 VPN")
+		} else if vpnRun {
+			statusLabel.SetText("状态: V2Ray 已停止 | VPN 运行中")
+			v2rayBtn.SetText("启动 V2Ray 核心")
+			vpnBtn.SetText("停止 VPN")
+		} else {
+			statusLabel.SetText("状态: 已停止")
+			v2rayBtn.SetText("启动 V2Ray 核心")
+			vpnBtn.SetText("启动 VPN")
+		}
+	}
+
+	v2rayBtn = widget.NewButton("启动 V2Ray 核心", func() {
+		v2rayBtn.Disable()
+		go func() {
+			defer fyne.Do(func() {
+				v2rayBtn.Enable()
+				updateStatus()
+			})
+
+			if !v2rayMgr.IsRunning() {
+				fyne.Do(func() {
+					statusLabel.SetText("状态: V2Ray 启动中...")
+				})
+
+				configBytes, err := os.ReadFile(cfg.V2RayConfigPath)
 				if err != nil {
-					dialog.ShowError(err, w)
+					_ = data.SaveConfig(cfg.V2RayConfigPath, cfg)
+					configBytes, err = os.ReadFile(cfg.V2RayConfigPath)
+					if err != nil {
+						fyne.Do(func() {
+							dialog.ShowError(err, w)
+						})
+						return
+					}
+				}
+
+				log.Printf("[Dashboard] Attempting to start V2Ray with config: %s", cfg.V2RayConfigPath)
+				err = v2rayMgr.Start(configBytes)
+				if err != nil {
+					log.Printf("[Dashboard] V2Ray start failed: %v", err)
+					fyne.Do(func() {
+						dialog.ShowError(err, w)
+					})
 					return
 				}
-			}
-
-			socksAddr := fmt.Sprintf("127.0.0.1:%d", cfg.SocksPort)
-			log.Printf("[Dashboard] Attempting to start V2Ray with config: %s, SOCKS addr: %s", cfg.V2RayConfigPath, socksAddr)
-			err = v2rayMgr.Start(configBytes)
-			if err != nil {
-				log.Printf("[Dashboard] V2Ray start failed: %v", err)
-				dialog.ShowError(err, w)
-				return
-			}
-			log.Printf("[Dashboard] V2Ray core started successfully. Now starting VPN manager...")
-			err = vpnMgr.StartVPN(socksAddr)
-			if err != nil {
-				log.Printf("[Dashboard] VPN start failed: %v", err)
+				log.Printf("[Dashboard] V2Ray core started successfully.")
+			} else {
+				fyne.Do(func() {
+					statusLabel.SetText("状态: V2Ray 停止中...")
+				})
 				_ = v2rayMgr.Stop()
-				dialog.ShowError(err, w)
-				return
+				log.Printf("[Dashboard] V2Ray core stopped.")
 			}
-			log.Printf("[Dashboard] VPN started successfully.")
-			statusLabel.SetText("状态: 运行中")
-			toggleBtn.SetText("停止代理与 VPN")
-		} else {
-			// 停止 VPN 与内存中的 V2Ray 核心
-			_ = vpnMgr.StopVPN()
-			_ = v2rayMgr.Stop()
-			statusLabel.SetText("状态: 已停止")
-			toggleBtn.SetText("启动代理与 VPN")
-		}
+		}()
+	})
+
+	vpnBtn = widget.NewButton("启动 VPN", func() {
+		vpnBtn.Disable()
+		go func() {
+			defer fyne.Do(func() {
+				vpnBtn.Enable()
+				updateStatus()
+			})
+
+			if !vpnMgr.IsRunning() {
+				fyne.Do(func() {
+					statusLabel.SetText("状态: VPN 启动中...")
+				})
+				socksAddr := fmt.Sprintf("127.0.0.1:%d", cfg.SocksPort)
+				log.Printf("[Dashboard] Attempting to start VPN manager, SOCKS addr: %s", socksAddr)
+				err := vpnMgr.StartVPN(socksAddr)
+				if err != nil {
+					log.Printf("[Dashboard] VPN start failed: %v", err)
+					fyne.Do(func() {
+						dialog.ShowError(err, w)
+					})
+					return
+				}
+				log.Printf("[Dashboard] VPN started successfully.")
+			} else {
+				fyne.Do(func() {
+					statusLabel.SetText("状态: VPN 停止中...")
+				})
+				_ = vpnMgr.StopVPN()
+				log.Printf("[Dashboard] VPN stopped.")
+			}
+		}()
 	})
 
 	configBtn := widget.NewButton("设置", func() {
@@ -117,7 +176,7 @@ func SetupDashboard(w fyne.Window) {
 	topContent := container.NewVBox(
 		widget.NewLabelWithStyle(fmt.Sprintf("GoOut 控制面板 v%s (内存版)", appVersion), fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		statusLabel,
-		container.NewHBox(toggleBtn, configBtn),
+		container.NewHBox(v2rayBtn, vpnBtn, configBtn),
 		widget.NewSeparator(),
 		container.NewBorder(nil, nil, widget.NewLabel("日志:"), clearBtn, nil),
 	)

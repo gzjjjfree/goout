@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"runtime/debug"
@@ -30,6 +31,7 @@ func setupLogCapture() {
 	rErr, wErr, err := os.Pipe()
 	if err == nil {
 		os.Stderr = wErr
+		log.SetOutput(wErr)
 		go func() {
 			scanner := bufio.NewScanner(rErr)
 			for scanner.Scan() {
