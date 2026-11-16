@@ -7,13 +7,46 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"syscall"
+	"unsafe"
 
 	"github.com/gzjjjfree/goout/jni"
 )
 
 var (
 	utunFile *os.File
+	utunName string
 )
+
+const (
+	sysprotoControl = 2
+	utunOptIfname   = 2
+)
+
+func getUtunName(fd uintptr) (string, error) {
+	var ifname [64]byte
+	l := uint32(len(ifname))
+	_, _, errno := syscall.Syscall6(
+		syscall.SYS_GETSOCKOPT,
+		fd,
+		uintptr(sysprotoControl),
+		uintptr(utunOptIfname),
+		uintptr(unsafe.Pointer(&ifname[0])),
+		uintptr(unsafe.Pointer(&l)),
+		0,
+	)
+	if errno != 0 {
+		return "", errno
+	}
+	name := string(ifname[:l])
+	for i, c := range name {
+		if c == 0 {
+			name = name[:i]
+			break
+		}
+	}
+	return name, nil
+}
 
 // StartVPN initializes macOS UTUN interface and routing table for global proxy with real file descriptor.
 func (v *VPNServiceManager) StartVPN(socksAddr string) error {
@@ -37,25 +70,41 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	simulatedFD := -1
 	if utunFile != nil {
 		simulatedFD = int(utunFile.Fd())
+		// Dynamically get the allocated utun interface name (e.g., utun0, utun1) instead of hardcoding
+		if name, err := getUtunName(utunFile.Fd()); err == nil && name != "" {
+			utunName = name
+			log.Printf("[macOS-VPN] Allocated UTUN interface name: %s", utunName)
+		} else {
+			utunName = "utun3" // fallback if getsockopt fails
+			log.Printf("[macOS-VPN] Failed to get UTUN interface name via getsockopt: %v, falling back to %s", err, utunName)
+		}
+	} else {
+		utunName = "utun3"
 	}
 
 	// Configure macOS routing / ifconfig for UTUN interface
-	ifconfigCmdStr := fmt.Sprintf("ifconfig utun3 %s %s up", v.tunIP, v.gateway)
+	ifconfigCmdStr := fmt.Sprintf("ifconfig %s %s %s up", utunName, v.tunIP, v.gateway)
 	log.Printf("[macOS-VPN] Executing command: %s", ifconfigCmdStr)
-	cmdIfconfig := exec.Command("ifconfig", "utun3", v.tunIP, v.gateway, "up")
+	cmdIfconfig := exec.Command("ifconfig", utunName, v.tunIP, v.gateway, "up")
 	if err := cmdIfconfig.Run(); err != nil {
 		log.Printf("[macOS-VPN] ifconfig setup notice: %v", err)
 	} else {
 		log.Printf("[macOS-VPN] ifconfig executed successfully.")
 	}
 
-	routeCmdStr := fmt.Sprintf("route add default %s", v.gateway)
-	log.Printf("[macOS-VPN] Executing command: %s", routeCmdStr)
-	cmdRoute := exec.Command("route", "add", "default", v.gateway)
-	if err := cmdRoute.Run(); err != nil {
-		log.Printf("[macOS-VPN] route setup notice: %v", err)
+	// Try route change default first; if it fails (no existing default route), add default
+	routeCmd := exec.Command("route", "change", "default", v.gateway)
+	log.Printf("[macOS-VPN] Executing command: route change default %s", v.gateway)
+	if err := routeCmd.Run(); err != nil {
+		log.Printf("[macOS-VPN] route change default notice: %v, trying route add...", err)
+		cmdRoute := exec.Command("route", "add", "default", v.gateway)
+		if errAdd := cmdRoute.Run(); errAdd != nil {
+			log.Printf("[macOS-VPN] route add default error: %v", errAdd)
+		} else {
+			log.Printf("[macOS-VPN] route added successfully.")
+		}
 	} else {
-		log.Printf("[macOS-VPN] route added successfully.")
+		log.Printf("[macOS-VPN] route changed default successfully.")
 	}
 
 	log.Printf("[macOS-VPN] Calling jni.StartTun2Socks with real FD=%d, tunIP=%s, gateway=%s, socksAddr=%s", simulatedFD, v.tunIP, v.gateway, socksAddr)

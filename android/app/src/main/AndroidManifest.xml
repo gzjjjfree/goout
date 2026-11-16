@@ -1,8 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.gzjjjfree.goout">
+
+    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
+
     <application
         android:extractNativeLibs="true"
         android:label="GoOut">
+        <service
+            android:name=".GoOutVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

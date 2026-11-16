@@ -40,6 +40,13 @@ func StartVPNWithFD(fd int, socksAddr string) {
 	androidFD = fd
 }
 
+// JNI export for GoOutVpnService.java nativeStartVPNWithFD
+//export Java_com_gzjjjfree_goout_GoOutVpnService_nativeStartVPNWithFD
+func Java_com_gzjjjfree_goout_GoOutVpnService_nativeStartVPNWithFD(env uintptr, thiz uintptr, fd int, socksAddrPtr uintptr) {
+	log.Printf("[Android-JNI] nativeStartVPNWithFD called from Android VpnService with FD=%d", fd)
+	androidFD = fd
+}
+
 // StopVPN stops Android VpnService TUN tunnel.
 func (v *VPNServiceManager) StopVPN() error {
 	v.mu.Lock()

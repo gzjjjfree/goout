@@ -154,6 +154,9 @@ func DefaultConfig() *Config {
 }
 
 func LoadConfig(path string) (*Config, error) {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(getWritableDir(), path)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return DefaultConfig(), err
@@ -166,6 +169,9 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 func SaveConfig(path string, cfg *Config) error {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(getWritableDir(), path)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}

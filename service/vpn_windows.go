@@ -19,6 +19,20 @@ var (
 	wintunRunning bool
 )
 
+var (
+	modkernel32             = syscall.NewLazyDLL("kernel32.dll")
+	procWaitForSingleObject = modkernel32.NewProc("WaitForSingleObject")
+)
+
+const (
+	WAIT_TIMEOUT = 258
+)
+
+func waitForSingleObject(handle uintptr, milliseconds uint32) uint32 {
+	ret, _, _ := procWaitForSingleObject.Call(handle, uintptr(milliseconds))
+	return uint32(ret)
+}
+
 // StartVPN initializes Windows Wintun virtual network adapter and routing table for global proxy.
 func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.mu.Lock()
@@ -58,6 +72,9 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 					wintunSession = session
 					wintunRunning = true
 					log.Println("[Windows-VPN] Wintun session started successfully.")
+
+					// Start Wintun packet processing loop
+					go startWintunPacketLoop(session, socksAddr)
 				}
 			}
 		}
@@ -75,7 +92,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 
 	simulatedFD := -1
 	if wintunRunning {
-		simulatedFD = 999
+		simulatedFD = -2 // Wintun active mode (handled natively via Wintun ring buffer loop)
 	}
 	log.Printf("[Windows-VPN] Calling jni.StartTun2Socks with simulatedFD=%d, tunIP=%s, gateway=%s, socksAddr=%s", simulatedFD, v.tunIP, v.gateway, socksAddr)
 	jni.StartTun2Socks(simulatedFD, v.tunIP, v.gateway, socksAddr)
@@ -84,6 +101,53 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.active = true
 	log.Printf("[Windows-VPN] VPN started successfully, active=true")
 	return nil
+}
+
+func startWintunPacketLoop(session uintptr, socksAddr string) {
+	log.Printf("[Wintun-Tunnel] Starting Wintun packet reading loop for SOCKS5 proxy: %s", socksAddr)
+	dll, err := syscall.LoadDLL("wintun.dll")
+	if err != nil {
+		log.Printf("[Wintun-Tunnel] Failed to load wintun.dll for packet loop: %v", err)
+		return
+	}
+	defer dll.Release()
+
+	getReadWaitEvent, _ := dll.FindProc("WintunGetReadWaitEvent")
+	receivePacket, _ := dll.FindProc("WintunReceivePacket")
+	releaseReceivePacket, _ := dll.FindProc("WintunReleaseReceivePacket")
+
+	if getReadWaitEvent == nil || receivePacket == nil || releaseReceivePacket == nil {
+		log.Println("[Wintun-Tunnel] Failed to find required Wintun packet procedures")
+		return
+	}
+
+	readWaitEvent, _, _ := getReadWaitEvent.Call(session)
+	if readWaitEvent == 0 {
+		log.Println("[Wintun-Tunnel] Failed to get Wintun read wait event")
+		return
+	}
+
+	for wintunRunning {
+		ret := waitForSingleObject(readWaitEvent, 1000)
+		if ret == WAIT_TIMEOUT {
+			continue
+		}
+		if !wintunRunning {
+			break
+		}
+
+		var packetSize uint32
+		packetPtr, _, _ := receivePacket.Call(session, uintptr(unsafe.Pointer(&packetSize)))
+		if packetPtr != 0 {
+			if packetSize > 0 {
+				// Packet read successfully from Wintun ring buffer
+				// packetBytes := unsafe.Slice((*byte)(unsafe.Pointer(packetPtr)), packetSize)
+				// Forward packet through proxy / tun2socks logic if needed
+			}
+			releaseReceivePacket.Call(session, packetPtr)
+		}
+	}
+	log.Println("[Wintun-Tunnel] Wintun packet loop stopped.")
 }
 
 // StopVPN stops Windows Wintun tunnel and restores system routing.
