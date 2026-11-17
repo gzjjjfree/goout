@@ -173,18 +173,35 @@ func startWintunPacketLoop(session uintptr, tunIP, gateway, socksAddr string) {
 }
 
 // processWintunPacket forwards a cloned IP packet through the shared forwarding engine and
-// writes any ICMP reply back into the Wintun transmit buffer.
+// writes any ICMP reply back into the Wintun transmit buffer using correct dynamic allocation.
 func processWintunPacket(session uintptr, tunIP, gateway, socksAddr string, packet []byte) {
 	jni.ForwardPacket(packet, tunIP, gateway, socksAddr, func(reply []byte) {
-		if wintunTransmitBuffer == nil || sendPacketProc == nil {
+		// 加载动态发送所需的 proc
+		dll, err := syscall.LoadDLL("wintun.dll")
+		if err != nil {
 			return
 		}
-		dst := unsafe.Slice((*byte)(wintunTransmitBuffer), wintunTransmitSize)
-		if len(reply) > len(dst) {
+		defer dll.Release()
+
+		getTransmitBuffer, _ := dll.FindProc("WintunGetTransmitBuffer")
+		sendPacket, _ := dll.FindProc("WintunSendPacket")
+		if getTransmitBuffer == nil || sendPacket == nil {
 			return
 		}
-		copy(dst, reply)
-		sendPacketProc.Call(session, uintptr(unsafe.Pointer(&dst[0])))
+
+		var transmitSize uint32 = uint32(len(reply))
+		// 每次发送前必须实时向 Wintun 申请一块对应大小的发送缓冲区
+		transmitPtr, _, _ := getTransmitBuffer.Call(session, uintptr(transmitSize))
+		if transmitPtr == 0 {
+			return
+		}
+
+		// 将回复包数据拷贝到 Wintun 分配的内存中
+		destSlice := unsafe.Slice((*byte)(unsafe.Pointer(transmitPtr)), transmitSize)
+		copy(destSlice, reply)
+
+		// 调用 WintunSendPacket 提交发送
+		sendPacket.Call(session, transmitPtr)
 	})
 }
 
