@@ -3,15 +3,84 @@ package jni
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"log"
 	"net"
 	"os"
+	"path/filepath"
+	"sync"
 	"time"
 )
 
-// StartTun2Socks 初始化纯 Go 网络代理隧道，处理 IP 数据包并通过 SOCKS5 代理转发。
-// fd 为 TUN 接口的文件描述符（0 或负数表示无真实设备的模拟模式）。
+// 缓存代理地址池的 IP 集合，避免每次发包都去读文件
+var (
+	poolIPCache  map[string]bool
+	poolIPMutex  sync.RWMutex
+	lastLoadTime time.Time
+)
+
+// ResultItem 对应 /result/result.json 中的节点结构
+type ResultItem struct {
+	Address string `json:"address"`
+}
+
+// loadProxyPoolIPs 动态加载 /result/result.json 中的 IP 地址池
+func loadProxyPoolIPs() map[string]bool {
+	poolIPMutex.Lock()
+	defer poolIPMutex.Unlock()
+
+	// 缓存 10 秒，避免频繁读取磁盘文件
+	if time.Since(lastLoadTime) < 10*time.Second && poolIPCache != nil {
+		return poolIPCache
+	}
+
+	cache := make(map[string]bool)
+
+	// 尝试寻找 result.json 文件的可能路径
+	paths := []string{
+		filepath.Join("result", "result.json"),
+		"result.json",
+		"config_save.json",
+	}
+
+	var fileBytes []byte
+	var err error
+	for _, p := range paths {
+		if fileBytes, err = os.ReadFile(p); err == nil {
+			break
+		}
+	}
+
+	if err == nil && len(fileBytes) > 0 {
+		var items []ResultItem
+		if err := json.Unmarshal(fileBytes, &items); err == nil {
+			for _, item := range items {
+				if item.Address != "" {
+					cache[item.Address] = true
+				}
+			}
+		} else {
+			// 兼容可能不是标准数组的格式，尝试解析通用 map
+			var rawMap map[string]interface{}
+			if errMap := json.Unmarshal(fileBytes, &rawMap); errMap == nil {
+				// 如果有其他结构可以在此适配
+			}
+		}
+	}
+
+	poolIPCache = cache
+	lastLoadTime = time.Now()
+	return cache
+}
+
+// isPoolIP 检查目标 IP 是否属于代理地址池
+func isPoolIP(targetIP string) bool {
+	pool := loadProxyPoolIPs()
+	return pool[targetIP]
+}
+
+// StartTun2Socks 初始化纯 Go 网络代理隧道
 func StartTun2Socks(fd int, tunAddr, gateway, socksServer string) {
 	log.Printf("[PureGo-Tunnel] StartTun2Socks called: fd=%d, tun=%s, gateway=%s, socks=%s", fd, tunAddr, gateway, socksServer)
 
@@ -29,8 +98,7 @@ func StartTun2Socks(fd int, tunAddr, gateway, socksServer string) {
 	go RunTunEngine(file, tunAddr, gateway, socksServer)
 }
 
-// RunTunEngine 驱动基于真实 TUN 文件描述符的数据包转发引擎。
-// 它持续读取原始 IP 数据包，并对发往本地网关的 ICMP 请求进行回复（使 `ping <tunIP>` 成功）。
+// RunTunEngine 驱动基于真实 TUN 文件描述符的数据包转发引擎
 func RunTunEngine(file *os.File, tunAddr, gateway, socksServer string) {
 	defer file.Close()
 
@@ -42,7 +110,6 @@ func RunTunEngine(file *os.File, tunAddr, gateway, socksServer string) {
 			return
 		}
 		if n > 20 {
-			// 创建当前包的独立切片，防止并发读写污染缓冲区
 			packet := make([]byte, n)
 			copy(packet, buf[:n])
 
@@ -53,8 +120,7 @@ func RunTunEngine(file *os.File, tunAddr, gateway, socksServer string) {
 	}
 }
 
-// ForwardPacket 处理单个接收到的原始 IP 数据包：
-// 识别并回复网关的 ICMP 请求，同时将 TCP/UDP 流量导向 SOCKS5 代理。
+// ForwardPacket 处理收到的原始 IP 数据包
 func ForwardPacket(packet []byte, tunAddr, gateway, socksServer string, sendBack func([]byte)) {
 	if len(packet) < 20 {
 		return
@@ -89,7 +155,7 @@ func ForwardPacket(packet []byte, tunAddr, gateway, socksServer string, sendBack
 	}
 }
 
-// handleICMPReply 构造针对本地网关/TUN IP 的 ICMP Echo Reply，使 `ping` 成功。
+// handleICMPReply 构造针对本地网关/TUN IP 的 ICMP Echo Reply
 func handleICMPReply(packet []byte, ihl int, localGateway, tunAddr string, sendBack func([]byte)) {
 	srcIP := net.IP(packet[12:16]).String()
 	dstIP := net.IP(packet[16:20]).String()
@@ -99,14 +165,13 @@ func handleICMPReply(packet []byte, ihl int, localGateway, tunAddr string, sendB
 	}
 
 	reqType := packet[ihl]
-	if reqType != 8 { // 8 = ICMP Echo Request (请求)
+	if reqType != 8 { // 8 = ICMP Echo Request
 		return
 	}
 
 	reply := make([]byte, len(packet))
 	copy(reply, packet)
 
-	// 交换源与目的 IP
 	src := net.ParseIP(srcIP).To4()
 	dst := net.ParseIP(dstIP).To4()
 	if src == nil || dst == nil {
@@ -115,7 +180,6 @@ func handleICMPReply(packet []byte, ihl int, localGateway, tunAddr string, sendB
 	copy(reply[12:16], dst)
 	copy(reply[16:20], src)
 
-	// 修改类型为 Echo Reply (0) 并重新计算校验和
 	reply[ihl] = 0
 	reply[ihl+1] = 0
 	setICMPChecksum(reply, ihl, len(reply))
@@ -123,7 +187,6 @@ func handleICMPReply(packet []byte, ihl int, localGateway, tunAddr string, sendB
 	sendBack(reply)
 }
 
-// setICMPChecksum 重新计算 ICMP 校验和
 func setICMPChecksum(buf []byte, headerStart, length int) {
 	for i := headerStart; i < length; i += 2 {
 		buf[i] = 0
@@ -144,8 +207,24 @@ func setICMPChecksum(buf []byte, headerStart, length int) {
 	binary.BigEndian.PutUint16(buf[headerStart+2:], checksum)
 }
 
-// forwardToSocks 连接 SOCKS5 代理并转发流量
+// forwardToSocks 连接 SOCKS5 代理并转发流量，同时加入地址池与本地回环过滤防死循环
 func forwardToSocks(socksServer, targetIP string, targetPort int, packet []byte) {
+	// ==================== 核心防回环/防无限直连校验 ====================
+
+	// 1. 过滤本地回环、网关及私有地址
+	if targetIP == "127.0.0.1" || targetIP == "0.0.0.0" || targetIP == "10.0.0.1" {
+		return
+	}
+
+	// 2. 核心：如果目标 IP 存在于你的 /result/result.json 地址池中，
+	// 说明这是代理节点自身的出口流量，绝对不能再次代理由 SOCKS5 发送，直接拦截丢弃或放行直连！
+	if isPoolIP(targetIP) {
+		// 属于地址池节点，直接返回不处理，切断死循环套娃
+		return
+	}
+
+	// ==============================================================
+
 	dialer := &net.Dialer{
 		Timeout: 5 * time.Second,
 	}
