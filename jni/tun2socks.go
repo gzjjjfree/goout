@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// StartTun2Socks initiates the pure Go network proxy tunnel, forwarding IP packets via SOCKS5 proxy.
-// fd is the TUN interface file descriptor (0 or negative means simulation mode without a real device).
+// StartTun2Socks 初始化纯 Go 网络代理隧道，处理 IP 数据包并通过 SOCKS5 代理转发。
+// fd 为 TUN 接口的文件描述符（0 或负数表示无真实设备的模拟模式）。
 func StartTun2Socks(fd int, tunAddr, gateway, socksServer string) {
 	log.Printf("[PureGo-Tunnel] StartTun2Socks called: fd=%d, tun=%s, gateway=%s, socks=%s", fd, tunAddr, gateway, socksServer)
 
@@ -26,18 +26,14 @@ func StartTun2Socks(fd int, tunAddr, gateway, socksServer string) {
 		return
 	}
 
-	go runTunEngine(file, tunAddr, gateway, socksServer)
+	go RunTunEngine(file, tunAddr, gateway, socksServer)
 }
 
-// RunTunEngine drives the shared packet-forwarding engine over a real TUN file descriptor.
-// It reads raw IP packets and forwards TCP/UDP traffic to the SOCKS5 server while replying
-// to ICMP echo requests aimed at the local gateway address (so `ping <tunIP>` works).
+// RunTunEngine 驱动基于真实 TUN 文件描述符的数据包转发引擎。
+// 它持续读取原始 IP 数据包，并对发往本地网关的 ICMP 请求进行回复（使 `ping <tunIP>` 成功）。
 func RunTunEngine(file *os.File, tunAddr, gateway, socksServer string) {
 	defer file.Close()
-	runTunEngine(file, tunAddr, gateway, socksServer)
-}
 
-func runTunEngine(file *os.File, tunAddr, gateway, socksServer string) {
 	buf := make([]byte, 32768)
 	for {
 		n, err := file.Read(buf)
@@ -46,7 +42,10 @@ func runTunEngine(file *os.File, tunAddr, gateway, socksServer string) {
 			return
 		}
 		if n > 20 {
-			packet := buf[:n]
+			// 创建当前包的独立切片，防止并发读写污染缓冲区
+			packet := make([]byte, n)
+			copy(packet, buf[:n])
+
 			ForwardPacket(packet, tunAddr, gateway, socksServer, func(reply []byte) {
 				_, _ = file.Write(reply)
 			})
@@ -54,10 +53,8 @@ func runTunEngine(file *os.File, tunAddr, gateway, socksServer string) {
 	}
 }
 
-// ForwardPacket processes a single received raw IP packet: it forwards TCP/UDP traffic to the
-// SOCKS5 server and answers ICMP echo requests aimed at localGateway/tunAddr (so that `ping`
-// succeeds). When sendBack is non-nil, any constructed reply packet is written through it; this
-// is used by the Windows Wintun path to write packets back into the virtual adapter.
+// ForwardPacket 处理单个接收到的原始 IP 数据包：
+// 识别并回复网关的 ICMP 请求，同时将 TCP/UDP 流量导向 SOCKS5 代理。
 func ForwardPacket(packet []byte, tunAddr, gateway, socksServer string, sendBack func([]byte)) {
 	if len(packet) < 20 {
 		return
@@ -65,7 +62,7 @@ func ForwardPacket(packet []byte, tunAddr, gateway, socksServer string, sendBack
 
 	versionAndIHL := packet[0]
 	if versionAndIHL>>4 != 4 {
-		return
+		return // 仅处理 IPv4
 	}
 	ihl := int(versionAndIHL&0x0F) * 4
 	if len(packet) < ihl {
@@ -78,7 +75,7 @@ func ForwardPacket(packet []byte, tunAddr, gateway, socksServer string, sendBack
 	}
 
 	switch packet[9] {
-	case 6, 17: // TCP or UDP
+	case 6, 17: // TCP 或 UDP
 		dstIP := net.IP(packet[16:20]).String()
 		if len(packet) < ihl+4 {
 			return
@@ -92,26 +89,24 @@ func ForwardPacket(packet []byte, tunAddr, gateway, socksServer string, sendBack
 	}
 }
 
-// handleICMPReply constructs an ICMP Echo Reply for requests aimed at the local gateway/TUN IP
-// and invokes sendBack with it so that `ping <tunIP>` succeeds in the tunnel.
+// handleICMPReply 构造针对本地网关/TUN IP 的 ICMP Echo Reply，使 `ping` 成功。
 func handleICMPReply(packet []byte, ihl int, localGateway, tunAddr string, sendBack func([]byte)) {
 	srcIP := net.IP(packet[12:16]).String()
-
-	// Only answer echo requests that target our local interface address.
 	dstIP := net.IP(packet[16:20]).String()
+
 	if dstIP != localGateway && dstIP != tunAddr {
 		return
 	}
 
 	reqType := packet[ihl]
-	if reqType != 8 { // 8 = ICMP Echo Request
+	if reqType != 8 { // 8 = ICMP Echo Request (请求)
 		return
 	}
 
 	reply := make([]byte, len(packet))
 	copy(reply, packet)
 
-	// Swap source/destination IPs.
+	// 交换源与目的 IP
 	src := net.ParseIP(srcIP).To4()
 	dst := net.ParseIP(dstIP).To4()
 	if src == nil || dst == nil {
@@ -120,15 +115,15 @@ func handleICMPReply(packet []byte, ihl int, localGateway, tunAddr string, sendB
 	copy(reply[12:16], dst)
 	copy(reply[16:20], src)
 
-	// Change type/code to Echo Reply (0, 0) and fix the checksum.
-	reply[ihl] = 0 // Echo Reply (0)
+	// 修改类型为 Echo Reply (0) 并重新计算校验和
+	reply[ihl] = 0
 	reply[ihl+1] = 0
 	setICMPChecksum(reply, ihl, len(reply))
 
 	sendBack(reply)
 }
 
-// setICMPChecksum recomputes the ICMP checksum over the header (and payload when provided).
+// setICMPChecksum 重新计算 ICMP 校验和
 func setICMPChecksum(buf []byte, headerStart, length int) {
 	for i := headerStart; i < length; i += 2 {
 		buf[i] = 0
@@ -139,7 +134,7 @@ func setICMPChecksum(buf []byte, headerStart, length int) {
 	for i := headerStart; i < length; i += 2 {
 		sum += uint32(buf[i])<<8 | uint32(buf[i+1])
 	}
-	if (length-headerStart)&1 == 1 { // odd byte (header only for echo reply)
+	if (length-headerStart)&1 == 1 {
 		sum += uint32(buf[length-1]) << 8
 	}
 	for sum>>16 != 0 {
@@ -149,21 +144,21 @@ func setICMPChecksum(buf []byte, headerStart, length int) {
 	binary.BigEndian.PutUint16(buf[headerStart+2:], checksum)
 }
 
+// forwardToSocks 连接 SOCKS5 代理并转发流量
 func forwardToSocks(socksServer, targetIP string, targetPort int, packet []byte) {
-	der := &net.Dialer{
+	dialer := &net.Dialer{
 		Timeout: 5 * time.Second,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	conn, err := der.DialContext(ctx, "tcp", socksServer)
+	conn, err := dialer.DialContext(ctx, "tcp", socksServer)
 	if err != nil {
-		// Fallback or log connection failure to SOCKS5 listener
 		return
 	}
 	defer conn.Close()
 
-	// SOCKS5 Greeting (Method selection: NO AUTHENTICATION REQUIRED = 0x00)
+	// SOCKS5 握手 (无认证: 0x00)
 	_, err = conn.Write([]byte{0x05, 0x01, 0x00})
 	if err != nil {
 		return
@@ -175,8 +170,7 @@ func forwardToSocks(socksServer, targetIP string, targetPort int, packet []byte)
 		return
 	}
 
-	// SOCKS5 Connect Request
-	// VER(0x05), CMD(0x01: CONNECT), RSV(0x00), ATYP(0x01: IPv4), DST.ADDR(4 bytes), DST.PORT(2 bytes)
+	// SOCKS5 连接请求
 	req := []byte{0x05, 0x01, 0x00, 0x01}
 	ip := net.ParseIP(targetIP).To4()
 	if ip == nil {
@@ -197,6 +191,6 @@ func forwardToSocks(socksServer, targetIP string, targetPort int, packet []byte)
 		return
 	}
 
-	// Forward packet payload / data
+	// 转发净荷数据
 	_, _ = conn.Write(packet)
 }
