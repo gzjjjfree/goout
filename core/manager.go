@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -271,35 +270,12 @@ func (m *V2rayManager) IsRunning() bool {
 	return m.isRunning
 }
 
-// CheckConfig 使用 V2Ray 核心的 -test 参数检查/验证配置是否合法
+// CheckConfig 使用内存中的 V2Ray 核心实例验证配置是否合法
 func (m *V2rayManager) CheckConfig(configJSON []byte) error {
-	fmt.Println("Checking V2Ray configuration...")
+	fmt.Println("Checking V2Ray configuration in memory...")
 	data.EnsureGeositeDat()
 	data.EnsureResultJSON()
-
-	// 写入临时配置文件用于 -test 验证
-	tmpFile, err := os.CreateTemp("", "v2ray-config-*.json")
-	if err != nil {
-		return m.checkConfigInMemory(configJSON)
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-
-	if _, err := tmpFile.Write(configJSON); err != nil {
-		_ = tmpFile.Close()
-		return m.checkConfigInMemory(configJSON)
-	}
-	_ = tmpFile.Close()
-
-	cmd := exec.Command("v2ray", "test", "-config", tmpPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if memErr := m.checkConfigInMemory(configJSON); memErr == nil {
-			return nil
-		}
-		return fmt.Errorf("v2ray config test failed: %w, output: %s", err, string(output))
-	}
-	return nil
+	return m.checkConfigInMemory(configJSON)
 }
 
 func (m *V2rayManager) checkConfigInMemory(configJSON []byte) error {

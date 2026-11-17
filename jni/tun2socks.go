@@ -207,23 +207,37 @@ func setICMPChecksum(buf []byte, headerStart, length int) {
 	binary.BigEndian.PutUint16(buf[headerStart+2:], checksum)
 }
 
-// forwardToSocks 连接 SOCKS5 代理并转发流量，同时加入地址池与本地回环过滤防死循环
+// forwardToSocks 连接 SOCKS5 代理并转发流量，同时加入地址池、局域网、组播及保留地址过滤
 func forwardToSocks(socksServer, targetIP string, targetPort int, packet []byte) {
-	// ==================== 核心防回环/防无限直连校验 ====================
+	// ==================== 1. 代码层强力防回环与杂项流量过滤 ====================
 
-	// 1. 过滤本地回环、网关及私有地址
-	if targetIP == "127.0.0.1" || targetIP == "0.0.0.0" || targetIP == "10.0.0.1" {
+	parsedIP := net.ParseIP(targetIP)
+	if parsedIP == nil {
 		return
 	}
 
-	// 2. 核心：如果目标 IP 存在于你的 /result/result.json 地址池中，
-	// 说明这是代理节点自身的出口流量，绝对不能再次代理由 SOCKS5 发送，直接拦截丢弃或放行直连！
+	// (A) 过滤本地回环、零地址、网关
+	if targetIP == "127.0.0.1" || targetIP == "0.0.0.0" || targetIP == "10.0.0.1" || parsedIP.IsLoopback() {
+		return
+	}
+
+	// (B) 过滤局域网私有网段 (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
+	// 如果你希望局域网设备互访走直连，可以把这一段去掉；若想全部在 TUN 层过滤掉，保留即可。
+	if parsedIP.IsPrivate() {
+		return
+	}
+
+	// (C) 过滤组播/多播地址 (如 224.0.0.1, 224.0.0.251 等) 及 广播地址 (255.255.255.255)
+	if parsedIP.IsMulticast() || targetIP == "255.255.255.255" {
+		return
+	}
+
+	// (D) 核心：如果目标 IP 存在于你的 /result/result.json 代理地址池中，直接拦截防死循环
 	if isPoolIP(targetIP) {
-		// 属于地址池节点，直接返回不处理，切断死循环套娃
 		return
 	}
 
-	// ==============================================================
+	// ======================================================================
 
 	dialer := &net.Dialer{
 		Timeout: 5 * time.Second,
@@ -251,7 +265,7 @@ func forwardToSocks(socksServer, targetIP string, targetPort int, packet []byte)
 
 	// SOCKS5 连接请求
 	req := []byte{0x05, 0x01, 0x00, 0x01}
-	ip := net.ParseIP(targetIP).To4()
+	ip := parsedIP.To4()
 	if ip == nil {
 		return
 	}
