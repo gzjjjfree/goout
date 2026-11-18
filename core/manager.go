@@ -25,8 +25,23 @@ func init() {
 	setupLogCapture()
 }
 
+func getValidFile(f *os.File) *os.File {
+	if f == nil {
+		if nullFile, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
+			return nullFile
+		}
+		return os.Stdout
+	}
+	if _, err := f.Stat(); err != nil {
+		if nullFile, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
+			return nullFile
+		}
+	}
+	return f
+}
+
 func setupLogCapture() {
-	oldStderr := os.Stderr
+	oldStderr := getValidFile(os.Stderr)
 	rErr, wErr, err := os.Pipe()
 	if err == nil {
 		os.Stderr = wErr
@@ -51,7 +66,7 @@ func setupLogCapture() {
 		}()
 	}
 
-	oldStdout := os.Stdout
+	oldStdout := getValidFile(os.Stdout)
 	rOut, wOut, err := os.Pipe()
 	if err == nil {
 		os.Stdout = wOut
