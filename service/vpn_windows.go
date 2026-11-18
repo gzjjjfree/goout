@@ -171,6 +171,8 @@ func (v *VPNServiceManager) cleanupRouting() {
 	if v.socksHost != "" {
 		_ = exec.Command("route", "delete", v.socksHost).Run()
 	}
+	// 确保 127.0.0.1 回环路由存在，防止断开 VPN 后 127.0.0.1 路由丢失导致无法上网
+	_ = exec.Command("route", "add", "127.0.0.1", "mask", "255.255.255.255", "127.0.0.1").Run()
 }
 
 // StopVPN stops Windows Wintun tunnel and restores system routing.
