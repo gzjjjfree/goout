@@ -9,39 +9,36 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/gzjjjfree/goout/data"
 	"github.com/gzjjjfree/goout/jni"
 )
 
-func getDefaultGatewayWindows(excludeGateway string) string {
-	out, err := exec.Command("route", "print", "0.0.0.0").Output()
+// getInterfaceIndexByName 获取指定网卡名称的 Windows 接口索引 (ifIndex)
+func getInterfaceIndexByName(alias string) string {
+	psCmd := fmt.Sprintf("(Get-NetAdapter -Name '%s' -ErrorAction SilentlyContinue).ifIndex", alias)
+	out, err := exec.Command("powershell", "-Command", psCmd).Output()
 	if err == nil {
-		lines := strings.Split(string(out), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "0.0.0.0") || strings.Contains(line, "0.0.0.0") {
-				fields := strings.Fields(line)
-				for _, field := range fields {
-					ip := net.ParseIP(field)
-					if ip != nil && ip.To4() != nil && field != "0.0.0.0" && field != "255.255.255.255" && field != excludeGateway {
-						return field
-					}
-				}
-			}
+		idx := strings.TrimSpace(string(out))
+		if idx != "" {
+			return idx
 		}
 	}
+	return ""
+}
 
-	psCmd := "Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object Metric | Select-Object -ExpandProperty NextHop -First 1"
+// getDefaultGatewayWindows 获取物理网卡的默认网关，用于为代理服务器添加防回环直连路由
+func getDefaultGatewayWindows(excludeGateway string) string {
+	psCmd := fmt.Sprintf("Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Where-Object { $_.NextHop -ne '%s' -and $_.NextHop -ne '0.0.0.0' } | Sort-Object RouteMetric | Select-Object -ExpandProperty NextHop -First 1", excludeGateway)
 	outPS, errPS := exec.Command("powershell", "-Command", psCmd).Output()
 	if errPS == nil {
 		gw := strings.TrimSpace(string(outPS))
 		ip := net.ParseIP(gw)
-		if ip != nil && ip.To4() != nil && gw != "0.0.0.0" && gw != excludeGateway {
+		if ip != nil && ip.To4() != nil {
 			return gw
 		}
 	}
-
 	return ""
 }
 
@@ -79,38 +76,51 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	}
 
 	v.originalGateway = getDefaultGatewayWindows(v.gateway)
-	log.Printf("[Windows-VPN] Recorded original default gateway: %s", v.originalGateway)
+	log.Printf("[Windows-VPN] Recorded physical gateway: %s", v.originalGateway)
 
-	// Start tun2socks engine with tun://GoOutTUN
+	// 1. 启动 tun2socks 引擎（会自动创建 GoOutTUN 网卡）
 	if err := jni.StartTun2Socks(-1, v.tunIP, v.gateway, socksAddr); err != nil {
 		log.Printf("[Windows-VPN] tun2socks engine failed to start: %v", err)
 		v.cleanupRouting()
 		return fmt.Errorf("start tun2socks: %w", err)
 	}
 
-	// Configure Windows routing / netsh interface address for GoOutTUN
-	cmdStr := fmt.Sprintf("netsh interface ipv4 set address name=GoOutTUN source=static addr=%s mask=255.255.255.0 gateway=%s", v.tunIP, v.gateway)
-	log.Printf("[Windows-VPN] Executing command: %s", cmdStr)
-	cmd := exec.Command("netsh", "interface", "ipv4", "set", "address", "name=GoOutTUN", "source=static", "addr="+v.tunIP, "mask=255.255.255.0", "gateway="+v.gateway)
+	// 稍等片刻确保 Wintun 驱动在系统中注册完毕
+	time.Sleep(300 * time.Millisecond)
+
+	// 2. 配置 GoOutTUN 的静态 IP 地址（注意：不在这里设置默认 gateway，避免破坏系统原有默认路由）
+	cmd := exec.Command("netsh", "interface", "ipv4", "set", "address", "name=GoOutTUN", "source=static", "addr="+v.tunIP, "mask=255.255.255.0")
 	if err := cmd.Run(); err != nil {
-		log.Printf("[Windows-VPN] netsh execution warning/error: %v", err)
+		log.Printf("[Windows-VPN] netsh set address warning: %v", err)
 	} else {
-		log.Printf("[Windows-VPN] netsh executed successfully.")
+		log.Println("[Windows-VPN] netsh IP address set successfully.")
 	}
 
-	// 禁用 GoOutTUN 网卡的 NetBIOS，彻底阻止广播和 137/138 端口流量进入 TUN 栈
+	// 3. 禁用 GoOutTUN 网卡的 NetBIOS，阻止 137/138 端口局域网广播进入 TUN
 	psDisableNetBIOS := fmt.Sprintf("Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.IPAddress -contains '%s' } | ForEach-Object { $_.SetTcpIPNetbios(2) }", v.tunIP)
 	_ = exec.Command("powershell", "-Command", psDisableNetBIOS).Run()
-	log.Println("[Windows-VPN] NetBIOS disabled on GoOutTUN interface successfully.")
 
-	_ = exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0", v.gateway).Run()
+	// 4. 获取 GoOutTUN 的接口索引 (ifIndex)
+	tunIfIndex := getInterfaceIndexByName("GoOutTUN")
+	log.Printf("[Windows-VPN] Detected GoOutTUN interface index: %s", tunIfIndex)
 
-	routeCmd := exec.Command("route", "change", "0.0.0.0", "mask", "0.0.0.0", v.gateway, "metric", "5")
-	log.Printf("[Windows-VPN] Executing route command: route change 0.0.0.0 mask 0.0.0.0 %s metric 5", v.gateway)
-	if errRoute := routeCmd.Run(); errRoute != nil {
-		log.Printf("[Windows-VPN] Failed to change default route: %v", errRoute)
+	// 5. 清理可能残留的 /1 路由
+	v.cleanupRouting()
+
+	// 6. 添加两条 /1 路由（0.0.0.0/1 和 128.0.0.0/1）强制接管所有 IPv4 流量，并精确绑定到 GoOutTUN 接口
+	var err1, err2 error
+	if tunIfIndex != "" {
+		err1 = exec.Command("route", "add", "0.0.0.0", "mask", "128.0.0.0", v.gateway, "metric", "5", "if", tunIfIndex).Run()
+		err2 = exec.Command("route", "add", "128.0.0.0", "mask", "128.0.0.0", v.gateway, "metric", "5", "if", tunIfIndex).Run()
 	} else {
-		log.Println("[Windows-VPN] Global default route changed successfully to GoOutTUN.")
+		err1 = exec.Command("route", "add", "0.0.0.0", "mask", "128.0.0.0", v.gateway, "metric", "5").Run()
+		err2 = exec.Command("route", "add", "128.0.0.0", "mask", "128.0.0.0", v.gateway, "metric", "5").Run()
+	}
+
+	if err1 != nil || err2 != nil {
+		log.Printf("[Windows-VPN] Failed to add /1 split routes: err1=%v, err2=%v", err1, err2)
+	} else {
+		log.Println("[Windows-VPN] Global split routes (0.0.0.0/1 & 128.0.0.0/1) bound to GoOutTUN successfully.")
 	}
 
 	v.active = true
@@ -118,11 +128,10 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	return nil
 }
 
+// cleanupRouting 清理添加的两条 /1 路由，系统会自动瞬间回退到原本的物理网卡路由
 func (v *VPNServiceManager) cleanupRouting() {
-	_ = exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0", v.gateway).Run()
-	if v.originalGateway != "" {
-		_ = exec.Command("route", "add", "0.0.0.0", "mask", "0.0.0.0", v.originalGateway, "metric", "25").Run()
-	}
+	_ = exec.Command("route", "delete", "0.0.0.0", "mask", "128.0.0.0").Run()
+	_ = exec.Command("route", "delete", "128.0.0.0", "mask", "128.0.0.0").Run()
 }
 
 // StopVPN stops Windows Wintun tunnel and restores system routing.
@@ -139,14 +148,9 @@ func (v *VPNServiceManager) StopVPN() error {
 	jni.CancelProxyContext()
 	jni.StopTun2Socks()
 
-	origGw := v.originalGateway
-	v.originalGateway = ""
 	go func() {
-		_ = exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0", v.gateway).Run()
-		if origGw != "" {
-			_ = exec.Command("route", "add", "0.0.0.0", "mask", "0.0.0.0", origGw, "metric", "25").Run()
-			log.Printf("[Windows-VPN] Restored original default gateway: %s", origGw)
-		}
+		v.cleanupRouting()
+		log.Println("[Windows-VPN] Split routes cleaned up, system restored to physical gateway.")
 	}()
 
 	v.active = false
