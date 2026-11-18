@@ -105,12 +105,12 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 
 	_ = exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0", v.gateway).Run()
 
-	routeCmd := exec.Command("route", "add", "0.0.0.0", "mask", "0.0.0.0", v.gateway, "metric", "5")
-	log.Printf("[Windows-VPN] Executing route command: route add 0.0.0.0 mask 0.0.0.0 %s metric 5", v.gateway)
+	routeCmd := exec.Command("route", "change", "0.0.0.0", "mask", "0.0.0.0", v.gateway, "metric", "5")
+	log.Printf("[Windows-VPN] Executing route command: route change 0.0.0.0 mask 0.0.0.0 %s metric 5", v.gateway)
 	if errRoute := routeCmd.Run(); errRoute != nil {
-		log.Printf("[Windows-VPN] Failed to add default route: %v", errRoute)
+		log.Printf("[Windows-VPN] Failed to change default route: %v", errRoute)
 	} else {
-		log.Println("[Windows-VPN] Global default route added successfully to GoOutTUN.")
+		log.Println("[Windows-VPN] Global default route changed successfully to GoOutTUN.")
 	}
 
 	v.active = true
