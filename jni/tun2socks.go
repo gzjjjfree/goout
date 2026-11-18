@@ -37,14 +37,14 @@ func CancelProxyContext() {
 }
 
 // StartTun2Socks starts the embedded tun2socks engine (gVisor netstack) with xjasonlyu/tun2socks v2.
-func StartTun2Socks(fd int, tunAddr, gateway, socksServer string) {
+func StartTun2Socks(fd int, tunAddr, gateway, socksServer string) error {
 	log.Printf("[Tun2Socks] StartTun2Socks called: fd=%d, tun=%s, gateway=%s, socks=%s", fd, tunAddr, gateway, socksServer)
 
 	var deviceStr string
 	if fd >= 0 {
 		deviceStr = fmt.Sprintf("fd://%d", fd)
 	} else if runtime.GOOS == "windows" {
-		deviceStr = "wintun://GoOutTUN"
+		deviceStr = "tun://GoOutTUN"
 	} else {
 		deviceStr = "tun://tun0"
 	}
@@ -62,6 +62,7 @@ func StartTun2Socks(fd int, tunAddr, gateway, socksServer string) {
 
 	engine.Start()
 	log.Println("[Tun2Socks] tun2socks engine started successfully.")
+	return nil
 }
 
 // StopTun2Socks stops the tun2socks engine.

@@ -73,8 +73,12 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.originalGateway = getDefaultGatewayWindows(v.gateway)
 	log.Printf("[Windows-VPN] Recorded original default gateway: %s", v.originalGateway)
 
-	// Start tun2socks engine with wintun://GoOutTUN
-	jni.StartTun2Socks(-1, v.tunIP, v.gateway, socksAddr)
+	// Start tun2socks engine with tun://GoOutTUN
+	if err := jni.StartTun2Socks(-1, v.tunIP, v.gateway, socksAddr); err != nil {
+		log.Printf("[Windows-VPN] tun2socks engine failed to start: %v", err)
+		v.cleanupRouting()
+		return fmt.Errorf("start tun2socks: %w", err)
+	}
 
 	// Configure Windows routing / netsh interface address for GoOutTUN
 	cmdStr := fmt.Sprintf("netsh interface ipv4 set address name=GoOutTUN source=static addr=%s mask=255.255.255.0 gateway=%s", v.tunIP, v.gateway)
