@@ -47,6 +47,9 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		return nil
 	}
 
+	// 初始化全局取消上下文，确保随时可瞬间打断
+	jni.InitProxyContext()
+
 	log.Printf("[Windows-VPN] Starting Wintun TUN interface & routing table: IP=%s, Gateway=%s, SOCKS=%s", v.tunIP, v.gateway, socksAddr)
 
 	// Ensure wintun.dll is available in execution directory
@@ -205,7 +208,7 @@ func processWintunPacket(session uintptr, tunIP, gateway, socksAddr string, pack
 	})
 }
 
-// StopVPN stops Windows Wintun tunnel and restores system routing immediately.
+// StopVPN 瞬间停止 Windows Wintun 隧道与所有网络连接，绝不拖延
 func (v *VPNServiceManager) StopVPN() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -214,33 +217,36 @@ func (v *VPNServiceManager) StopVPN() error {
 		return nil
 	}
 
-	log.Println("[Windows-VPN] Stopping Windows Wintun tunnel & restoring default routing immediately")
+	log.Println("[Windows-VPN] Stopping Windows Wintun tunnel instantly...")
 
-	v.active = false
+	// 1. 【最关键】瞬间取消所有正在进行的网络 Dial 和代理传输，不等待任何网络回应
+	jni.CancelProxyContext()
 
-	if wintunRunning {
-		wintunRunning = false
-		session := wintunSession
-		adapter := wintunAdapter
+	// 2. 标志位设为 false，停止 Wintun 读取循环
+	wintunRunning = false
+
+	// 3. 立即关闭 Wintun Session 与 Adapter
+	if wintunSession != 0 {
+		if wintunDll, err := syscall.LoadDLL("wintun.dll"); err == nil {
+			if endSession, err := wintunDll.FindProc("WintunEndSession"); err == nil && endSession != nil {
+				_, _, _ = endSession.Call(wintunSession)
+			}
+			if closeAdapter, err := wintunDll.FindProc("WintunCloseAdapter"); err == nil && closeAdapter != nil {
+				_, _, _ = closeAdapter.Call(wintunAdapter)
+			}
+			_ = wintunDll.Release()
+		}
 		wintunSession = 0
 		wintunAdapter = 0
-		go func() {
-			if wintunDll, err := syscall.LoadDLL("wintun.dll"); err == nil {
-				if endSession, err := wintunDll.FindProc("WintunEndSession"); err == nil && endSession != nil {
-					_, _, _ = endSession.Call(session)
-				}
-				if closeAdapter, err := wintunDll.FindProc("WintunCloseAdapter"); err == nil && closeAdapter != nil {
-					_, _, _ = closeAdapter.Call(adapter)
-				}
-				_ = wintunDll.Release()
-			}
-		}()
 	}
 
+	// 4. 将耗时的网卡删除命令放入后台异步执行，确保 StopVPN 毫秒级返回，绝不卡 UI
 	go func() {
 		cmd := exec.Command("netsh", "interface", "ipv4", "delete", "interface", "GoOutTUN")
 		_ = cmd.Run()
 	}()
 
+	v.active = false
+	log.Println("[Windows-VPN] VPN stopped completely in milliseconds.")
 	return nil
 }

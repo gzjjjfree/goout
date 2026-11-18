@@ -13,6 +13,33 @@ import (
 	"time"
 )
 
+// 在 jni 包中新增全局 Context 管理
+var (
+	proxyCtx    context.Context
+	proxyCancel context.CancelFunc
+	proxyMutex  sync.Mutex
+)
+
+// InitProxyContext 初始化代理上下文
+func InitProxyContext() {
+	proxyMutex.Lock()
+	defer proxyMutex.Unlock()
+	if proxyCancel != nil {
+		proxyCancel()
+	}
+	proxyCtx, proxyCancel = context.WithCancel(context.Background())
+}
+
+// CancelProxyContext 瞬间中止所有正在进行的代理连接
+func CancelProxyContext() {
+	proxyMutex.Lock()
+	defer proxyMutex.Unlock()
+	if proxyCancel != nil {
+		proxyCancel()
+		proxyCancel = nil
+	}
+}
+
 var (
 	poolIPCache  map[string]bool
 	poolIPMutex  sync.RWMutex
@@ -131,6 +158,29 @@ func RunTunEngine(file *os.File, tunAddr, gateway, socksServer string) {
 }
 
 func ForwardPacket(packet []byte, tunAddr, gateway, socksServer string, sendBack func([]byte)) {
+	// 初始化时调用 jni.InitProxyContext()
+	// 在 forwardToSocks 中：
+	proxyMutex.Lock()
+	currentCtx := proxyCtx
+	proxyMutex.Unlock()
+
+	if currentCtx == nil {
+		currentCtx = context.Background()
+	}
+
+	// 派生超时上下文，但一旦全局 CancelProxyContext 被调用，这里会瞬间中断
+	ctx, cancel := context.WithTimeout(currentCtx, 10*time.Second)
+	defer cancel()
+
+	dialer := &net.Dialer{
+		Timeout: 3 * time.Second,
+	}
+	conn, err := dialer.DialContext(ctx, "tcp", socksServer)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
 	if len(packet) < 20 {
 		return
 	}
