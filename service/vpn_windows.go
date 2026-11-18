@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -69,6 +70,18 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	log.Printf("[Windows-VPN] Starting Wintun TUN interface & routing table: IP=%s, Gateway=%s, SOCKS=%s", v.tunIP, v.gateway, socksAddr)
 
 	data.EnsureWintunDLL()
+	if fi, err := os.Stat("wintun.dll"); err == nil {
+		log.Printf("[Windows-VPN] wintun.dll verified: size=%d bytes", fi.Size())
+	} else {
+		log.Printf("[Windows-VPN] WARNING: wintun.dll stat failed: %v", err)
+	}
+
+	// 检查管理员权限
+	if cmdAdmin := exec.Command("net", "session"); cmdAdmin.Run() != nil {
+		log.Println("[Windows-VPN] CRITICAL WARNING: Not running as Administrator! Wintun creation will likely fail or crash.")
+	} else {
+		log.Println("[Windows-VPN] Running with Administrator privileges confirmed.")
+	}
 
 	v.originalGateway = getDefaultGatewayWindows(v.gateway)
 	log.Printf("[Windows-VPN] Recorded original default gateway: %s", v.originalGateway)
