@@ -1,9 +1,9 @@
 package core
 
 import (
-	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"runtime/debug"
@@ -25,70 +25,43 @@ func init() {
 	setupLogCapture()
 }
 
-func getValidFile(f *os.File) *os.File {
-	if f == nil {
-		if nullFile, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
-			return nullFile
-		}
-		return os.Stdout
+type logWriter struct {
+	file *os.File
+	mu   sync.Mutex
+}
+
+func (w *logWriter) Write(p []byte) (n int, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.file != nil {
+		_, _ = w.file.Write(p)
 	}
-	if _, err := f.Stat(); err != nil {
-		if nullFile, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
-			return nullFile
+
+	line := string(p)
+	trimmed := strings.TrimSpace(line)
+	if trimmed != "" {
+		earlyMu.Lock()
+		if globalManager != nil {
+			globalManager.addLog("%s", trimmed)
+		} else {
+			earlyLogs = append(earlyLogs, trimmed)
 		}
+		earlyMu.Unlock()
 	}
-	return f
+
+	return len(p), nil
 }
 
 func setupLogCapture() {
-	oldStderr := getValidFile(os.Stderr)
-	rErr, wErr, err := os.Pipe()
+	logFile, err := os.OpenFile("goout.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	var writer io.Writer
 	if err == nil {
-		os.Stderr = wErr
-		log.SetOutput(wErr)
-		go func() {
-			scanner := bufio.NewScanner(rErr)
-			for scanner.Scan() {
-				line := scanner.Text()
-				_, _ = oldStderr.WriteString(line + "\n")
-
-				trimmed := strings.TrimSpace(line)
-				if trimmed != "" {
-					earlyMu.Lock()
-					if globalManager != nil {
-						globalManager.addLog("%s", trimmed)
-					} else {
-						earlyLogs = append(earlyLogs, trimmed)
-					}
-					earlyMu.Unlock()
-				}
-			}
-		}()
+		writer = &logWriter{file: logFile}
+	} else {
+		writer = &logWriter{file: nil}
 	}
-
-	oldStdout := getValidFile(os.Stdout)
-	rOut, wOut, err := os.Pipe()
-	if err == nil {
-		os.Stdout = wOut
-		go func() {
-			scanner := bufio.NewScanner(rOut)
-			for scanner.Scan() {
-				line := scanner.Text()
-				_, _ = oldStdout.WriteString(line + "\n")
-
-				trimmed := strings.TrimSpace(line)
-				if trimmed != "" {
-					earlyMu.Lock()
-					if globalManager != nil {
-						globalManager.addLog("%s", trimmed)
-					} else {
-						earlyLogs = append(earlyLogs, trimmed)
-					}
-					earlyMu.Unlock()
-				}
-			}
-		}()
-	}
+	log.SetOutput(writer)
 }
 
 // V2rayManager 管理 V2Ray 核心在内存中的生命周期（适配 Android 10+ W^X 安全策略）

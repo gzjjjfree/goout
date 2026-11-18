@@ -12,6 +12,7 @@ type VPNServiceManager struct {
 	gateway         string
 	dnsServer       string
 	originalGateway string
+	socksHost       string
 }
 
 func NewVPNServiceManager(tunIP, gateway string) *VPNServiceManager {
