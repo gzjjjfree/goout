@@ -36,12 +36,8 @@ func EnsureWintunDLL() {
 	}
 }
 
-// EnsureGeositeDat 确保 geosite.dat 在运行时写入且仅写入与运行文件同目录下，并设置 v2ray.location.asset 环境变量
-func EnsureGeositeDat() {
-	if len(embeddedGeosite) == 0 {
-		return
-	}
-
+// getTargetDir 获取与运行文件或工作目录相同的目标目录（与 geosite.dat 同一目录）
+func getTargetDir() string {
 	targetDir := ""
 	if exe, err := os.Executable(); err == nil && exe != "" {
 		targetDir = filepath.Dir(exe)
@@ -51,6 +47,16 @@ func EnsureGeositeDat() {
 	if targetDir == "" {
 		targetDir = "."
 	}
+	return targetDir
+}
+
+// EnsureGeositeDat 确保 geosite.dat 在运行时写入且仅写入与运行文件同目录下，并设置 v2ray.location.asset 环境变量
+func EnsureGeositeDat() {
+	if len(embeddedGeosite) == 0 {
+		return
+	}
+
+	targetDir := getTargetDir()
 
 	if err := os.MkdirAll(targetDir, 0755); err == nil {
 		p := filepath.Join(targetDir, "geosite.dat")
@@ -67,15 +73,7 @@ func EnsureResultJSON() {
 		return
 	}
 
-	targetDir := ""
-	if exe, err := os.Executable(); err == nil && exe != "" {
-		targetDir = filepath.Dir(exe)
-	} else if wd, err := os.Getwd(); err == nil && wd != "" {
-		targetDir = wd
-	}
-	if targetDir == "" {
-		targetDir = "."
-	}
+	targetDir := getTargetDir()
 
 	resultDir := filepath.Join(targetDir, "result")
 	if err := os.MkdirAll(resultDir, 0755); err == nil {
@@ -144,7 +142,7 @@ func getWritableDir(subPath ...string) string {
 }
 
 func DefaultConfig() *Config {
-	configDir := getWritableDir()
+	configDir := getTargetDir()
 	configPath := filepath.Join(configDir, "goout.json")
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -164,7 +162,7 @@ func DefaultConfig() *Config {
 
 func LoadConfig(path string) (*Config, error) {
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(getWritableDir(), path)
+		path = filepath.Join(getTargetDir(), path)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -179,7 +177,7 @@ func LoadConfig(path string) (*Config, error) {
 
 func SaveConfig(path string, cfg *Config) error {
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(getWritableDir(), path)
+		path = filepath.Join(getTargetDir(), path)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err

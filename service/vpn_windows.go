@@ -149,7 +149,7 @@ func startWintunPacketLoop(session uintptr, tunIP, gateway, socksAddr string) {
 	}
 
 	for wintunRunning {
-		ret := waitForSingleObject(readWaitEvent, 1000)
+		ret := waitForSingleObject(readWaitEvent, 50)
 		if ret == WAIT_TIMEOUT {
 			continue
 		}
@@ -205,7 +205,7 @@ func processWintunPacket(session uintptr, tunIP, gateway, socksAddr string, pack
 	})
 }
 
-// StopVPN stops Windows Wintun tunnel and restores system routing.
+// StopVPN stops Windows Wintun tunnel and restores system routing immediately.
 func (v *VPNServiceManager) StopVPN() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -214,26 +214,33 @@ func (v *VPNServiceManager) StopVPN() error {
 		return nil
 	}
 
-	log.Println("[Windows-VPN] Stopping Windows Wintun tunnel & restoring default routing")
+	log.Println("[Windows-VPN] Stopping Windows Wintun tunnel & restoring default routing immediately")
+
+	v.active = false
 
 	if wintunRunning {
 		wintunRunning = false
-		if wintunDll, err := syscall.LoadDLL("wintun.dll"); err == nil {
-			if endSession, err := wintunDll.FindProc("WintunEndSession"); err == nil && endSession != nil {
-				_, _, _ = endSession.Call(wintunSession)
-			}
-			if closeAdapter, err := wintunDll.FindProc("WintunCloseAdapter"); err == nil && closeAdapter != nil {
-				_, _, _ = closeAdapter.Call(wintunAdapter)
-			}
-			_ = wintunDll.Release()
-		}
+		session := wintunSession
+		adapter := wintunAdapter
 		wintunSession = 0
 		wintunAdapter = 0
+		go func() {
+			if wintunDll, err := syscall.LoadDLL("wintun.dll"); err == nil {
+				if endSession, err := wintunDll.FindProc("WintunEndSession"); err == nil && endSession != nil {
+					_, _, _ = endSession.Call(session)
+				}
+				if closeAdapter, err := wintunDll.FindProc("WintunCloseAdapter"); err == nil && closeAdapter != nil {
+					_, _, _ = closeAdapter.Call(adapter)
+				}
+				_ = wintunDll.Release()
+			}
+		}()
 	}
 
-	cmd := exec.Command("netsh", "interface", "ipv4", "delete", "interface", "GoOutTUN")
-	_ = cmd.Run()
+	go func() {
+		cmd := exec.Command("netsh", "interface", "ipv4", "delete", "interface", "GoOutTUN")
+		_ = cmd.Run()
+	}()
 
-	v.active = false
 	return nil
 }

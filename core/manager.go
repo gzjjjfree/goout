@@ -248,12 +248,13 @@ func (m *V2rayManager) Stop() error {
 	m.mu.Unlock() // 释放锁，允许其他操作进入
 
 	if inst != nil {
-		// 同步关闭实例，确保底层的 TCP 监听端口被操作系统彻底回收
-		// 如果担心极端情况下阻塞，可以用带超时的 channel 包裹，但同步 Close 能从根本上解决再次启动端口被占用的问题
-		err := inst.Close()
-		if err != nil && m.onLog != nil {
-			m.onLog(fmt.Sprintf("V2Ray instance close warning: %v", err))
-		}
+		// 异步关闭实例，避免等待网络回应或连接断开导致阻塞
+		go func() {
+			err := inst.Close()
+			if err != nil && m.onLog != nil {
+				m.onLog(fmt.Sprintf("V2Ray instance close warning: %v", err))
+			}
+		}()
 	}
 
 	if m.onLog != nil {
