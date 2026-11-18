@@ -13,14 +13,13 @@ import (
 	"time"
 )
 
-// 在 jni 包中新增全局 Context 管理
+// 全局 Context 管理（用于点击停止时秒停）
 var (
 	proxyCtx    context.Context
 	proxyCancel context.CancelFunc
 	proxyMutex  sync.Mutex
 )
 
-// InitProxyContext 初始化代理上下文
 func InitProxyContext() {
 	proxyMutex.Lock()
 	defer proxyMutex.Unlock()
@@ -30,7 +29,6 @@ func InitProxyContext() {
 	proxyCtx, proxyCancel = context.WithCancel(context.Background())
 }
 
-// CancelProxyContext 瞬间中止所有正在进行的代理连接
 func CancelProxyContext() {
 	proxyMutex.Lock()
 	defer proxyMutex.Unlock()
@@ -50,7 +48,6 @@ type ResultItem struct {
 	Address string `json:"address"`
 }
 
-// loadProxyPoolIPs 动态加载代理地址池，增加日志和健壮性
 func loadProxyPoolIPs() map[string]bool {
 	poolIPMutex.Lock()
 	defer poolIPMutex.Unlock()
@@ -60,7 +57,6 @@ func loadProxyPoolIPs() map[string]bool {
 	}
 
 	cache := make(map[string]bool)
-
 	paths := []string{
 		filepath.Join("result", "result.json"),
 		"result.json",
@@ -75,14 +71,11 @@ func loadProxyPoolIPs() map[string]bool {
 		}
 	}
 
-	if err != nil {
-		log.Printf("[PureGo-Tunnel] Notice: failed to load proxy pool config file: %v", err)
-	} else if len(fileBytes) > 0 {
+	if err == nil && len(fileBytes) > 0 {
 		var items []ResultItem
-		if err := json.Unmarshal(fileBytes, &items); err == nil {
+		if json.Unmarshal(fileBytes, &items) == nil {
 			for _, item := range items {
 				if item.Address != "" {
-					// 兼容可能带端口的地址
 					host, _, errSplit := net.SplitHostPort(item.Address)
 					if errSplit == nil {
 						cache[host] = true
@@ -91,8 +84,6 @@ func loadProxyPoolIPs() map[string]bool {
 					}
 				}
 			}
-		} else {
-			log.Printf("[PureGo-Tunnel] Warning: failed to unmarshal proxy pool json: %v", err)
 		}
 	}
 
@@ -101,9 +92,7 @@ func loadProxyPoolIPs() map[string]bool {
 	return cache
 }
 
-// isBypassedIP 检查目标 IP 是否属于代理池或需要强制排除的代理服务器自身地址
 func isBypassedIP(targetIP, socksServer string) bool {
-	// 1. 检查是否为代理服务器自身的 host
 	if socksServer != "" {
 		if host, _, err := net.SplitHostPort(socksServer); err == nil {
 			if host == targetIP {
@@ -113,8 +102,6 @@ func isBypassedIP(targetIP, socksServer string) bool {
 			return true
 		}
 	}
-
-	// 2. 检查是否在 result.json 代理地址池中
 	pool := loadProxyPoolIPs()
 	return pool[targetIP]
 }
@@ -158,29 +145,6 @@ func RunTunEngine(file *os.File, tunAddr, gateway, socksServer string) {
 }
 
 func ForwardPacket(packet []byte, tunAddr, gateway, socksServer string, sendBack func([]byte)) {
-	// 初始化时调用 jni.InitProxyContext()
-	// 在 forwardToSocks 中：
-	proxyMutex.Lock()
-	currentCtx := proxyCtx
-	proxyMutex.Unlock()
-
-	if currentCtx == nil {
-		currentCtx = context.Background()
-	}
-
-	// 派生超时上下文，但一旦全局 CancelProxyContext 被调用，这里会瞬间中断
-	ctx, cancel := context.WithTimeout(currentCtx, 10*time.Second)
-	defer cancel()
-
-	dialer := &net.Dialer{
-		Timeout: 3 * time.Second,
-	}
-	conn, err := dialer.DialContext(ctx, "tcp", socksServer)
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-
 	if len(packet) < 20 {
 		return
 	}
@@ -200,13 +164,48 @@ func ForwardPacket(packet []byte, tunAddr, gateway, socksServer string, sendBack
 	}
 
 	switch packet[9] {
-	case 6, 17: // TCP 或 UDP
+	case 6: // TCP
+		dstIP := net.IP(packet[16:20]).String()
+		if len(packet) < ihl+20 { // 确保包含完整的 TCP 头部（至少 20 字节）
+			return
+		}
+		dstPort := int(packet[ihl+2])<<8 | int(packet[ihl+3])
+
+		// 获取 TCP 头部长度和标志位
+		tcpHeaderOffset := ihl
+		dataOffsetAndReserved := packet[tcpHeaderOffset+12]
+		tcpHeaderLen := int(dataOffsetAndReserved>>4) * 4
+		if len(packet) < tcpHeaderOffset+14 {
+			return
+		}
+		tcpFlags := packet[tcpHeaderOffset+13]
+
+		// 计算应用层 Payload 长度
+		// 总 IP 长度 - IP头长度 - TCP头长度
+		totalIPLen := int(packet[2])<<8 | int(packet[3])
+		payloadLen := totalIPLen - ihl - tcpHeaderLen
+
+		isSYN := (tcpFlags & 0x02) != 0
+		isFIN := (tcpFlags & 0x01) != 0
+		isRST := (tcpFlags & 0x04) != 0
+
+		// 核心通用过滤逻辑：
+		// 1. 如果是纯控制包（SYN、FIN、RST）且没有实际应用层数据负载 (payloadLen <= 0)，
+		//    绝对不转给 SOCKS5，直接静默丢弃，彻底根治所有 IP 的握手风暴与 EOF 报错！
+		if (isSYN || isFIN || isRST) && payloadLen <= 0 {
+			return
+		}
+
+		go forwardToSocks(socksServer, dstIP, dstPort, packet)
+
+	case 17: // UDP
 		dstIP := net.IP(packet[16:20]).String()
 		if len(packet) < ihl+4 {
 			return
 		}
 		dstPort := int(packet[ihl+2])<<8 | int(packet[ihl+3])
 		go forwardToSocks(socksServer, dstIP, dstPort, packet)
+
 	case 1: // ICMP
 		if sendBack != nil {
 			handleICMPReply(packet, ihl, localGateway, tunAddr, sendBack)
@@ -214,7 +213,6 @@ func ForwardPacket(packet []byte, tunAddr, gateway, socksServer string, sendBack
 	}
 }
 
-// handleICMPReply 安全构造 ICMP 回复，并同时重算 IP 头与 ICMP 校验和
 func handleICMPReply(packet []byte, ihl int, localGateway, tunAddr string, sendBack func([]byte)) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -230,7 +228,7 @@ func handleICMPReply(packet []byte, ihl int, localGateway, tunAddr string, sendB
 	}
 
 	reqType := packet[ihl]
-	if reqType != 8 { // 8 = ICMP Echo Request
+	if reqType != 8 {
 		return
 	}
 
@@ -245,10 +243,8 @@ func handleICMPReply(packet []byte, ihl int, localGateway, tunAddr string, sendB
 	copy(reply[12:16], dst)
 	copy(reply[16:20], src)
 
-	// 重算 IP 头部校验和
 	setIPChecksum(reply, ihl)
 
-	// 修改类型为 Echo Reply (0) 并重算 ICMP 校验和
 	reply[ihl] = 0
 	reply[ihl+1] = 0
 	setICMPChecksum(reply, ihl, len(reply))
@@ -270,7 +266,6 @@ func setIPChecksum(buf []byte, ihl int) {
 	binary.BigEndian.PutUint16(buf[10:], checksum)
 }
 
-// setICMPChecksum 安全计算 ICMP 校验和，避免奇数长度越界
 func setICMPChecksum(buf []byte, headerStart, length int) {
 	for i := headerStart; i < length; i += 2 {
 		buf[i] = 0
@@ -296,41 +291,45 @@ func setICMPChecksum(buf []byte, headerStart, length int) {
 }
 
 func forwardToSocks(socksServer, targetIP string, targetPort int, packet []byte) {
-	log.Printf("[TUN-Debug] Capturing packet to target IP: %s:%d", targetIP, targetPort)
 	parsedIP := net.ParseIP(targetIP)
 	if parsedIP == nil {
 		return
 	}
 
-	// 1. 严格白名单与保留段过滤：
-	// 必须是全球单播地址 (IsGlobalUnicast)，且排除本地回环、私网、链路本地、CGNAT 及多播等
+	// 1. 严格白名单与保留段过滤
 	if !parsedIP.IsGlobalUnicast() || parsedIP.IsLoopback() || parsedIP.IsPrivate() || parsedIP.IsLinkLocalUnicast() || parsedIP.IsMulticast() {
 		return
 	}
 
-	// 排除运营商级 NAT (CGNAT: 100.64.0.0/10) 及其他特殊保留段
 	ip4 := parsedIP.To4()
 	if ip4 != nil {
-		// 100.64.0.0/10
 		if ip4[0] == 100 && (ip4[1]&192) == 64 {
 			return
 		}
-		// 198.18.0.0/15 (Benchmarking)
 		if ip4[0] == 198 && (ip4[1]&254) == 18 {
 			return
 		}
 	}
 
-	// 2. 检查是否命中代理服务器自身或代理地址池，彻底切断回环
+	// 2. 检查是否命中代理服务器自身或代理地址池
 	if isBypassedIP(targetIP, socksServer) {
 		return
 	}
 
-	dialer := &net.Dialer{
-		Timeout: 5 * time.Second,
+	proxyMutex.Lock()
+	currentCtx := proxyCtx
+	proxyMutex.Unlock()
+
+	if currentCtx == nil {
+		currentCtx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
+	ctx, cancel := context.WithTimeout(currentCtx, 5*time.Second)
 	defer cancel()
+
+	dialer := &net.Dialer{
+		Timeout: 3 * time.Second,
+	}
 
 	conn, err := dialer.DialContext(ctx, "tcp", socksServer)
 	if err != nil {
@@ -338,7 +337,7 @@ func forwardToSocks(socksServer, targetIP string, targetPort int, packet []byte)
 	}
 	defer conn.Close()
 
-	// SOCKS5 握手 (无认证: 0x00)
+	// SOCKS5 握手
 	_, err = conn.Write([]byte{0x05, 0x01, 0x00})
 	if err != nil {
 		return
@@ -350,7 +349,6 @@ func forwardToSocks(socksServer, targetIP string, targetPort int, packet []byte)
 		return
 	}
 
-	// SOCKS5 连接请求
 	req := []byte{0x05, 0x01, 0x00, 0x01}
 	if ip4 == nil {
 		return
