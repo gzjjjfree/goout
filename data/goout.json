@@ -2,6 +2,11 @@
     "log": {
         "loglevel": "none"
     },
+    "dns": {
+        "servers": [
+            "localhost"
+        ]
+    },
     "inbounds": [
         {
             "tag": "gz",
