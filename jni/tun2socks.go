@@ -246,6 +246,7 @@ func setICMPChecksum(buf []byte, headerStart, length int) {
 }
 
 func forwardToSocks(socksServer, targetIP string, targetPort int, packet []byte) {
+	log.Printf("[TUN-Debug] Capturing packet to target IP: %s:%d", targetIP, targetPort)
 	parsedIP := net.ParseIP(targetIP)
 	if parsedIP == nil {
 		return
