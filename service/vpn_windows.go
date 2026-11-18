@@ -14,20 +14,35 @@ import (
 )
 
 func getDefaultGatewayWindows(excludeGateway string) string {
+	// 1. 尝试通过 route print 获取默认网关（兼容中英文 Windows 输出）
 	out, err := exec.Command("route", "print", "0.0.0.0").Output()
-	if err != nil {
-		return ""
-	}
-	lines := strings.Split(string(out), "\n")
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) >= 3 && fields[0] == "0.0.0.0" && fields[1] == "0.0.0.0" {
-			gateway := fields[2]
-			if net.ParseIP(gateway) != nil && gateway != "0.0.0.0" && gateway != excludeGateway {
-				return gateway
+	if err == nil {
+		lines := strings.Split(string(out), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "0.0.0.0") || strings.Contains(line, "0.0.0.0") {
+				fields := strings.Fields(line)
+				for _, field := range fields {
+					ip := net.ParseIP(field)
+					if ip != nil && ip.To4() != nil && field != "0.0.0.0" && field != "255.255.255.255" && field != excludeGateway {
+						return field
+					}
+				}
 			}
 		}
 	}
+
+	// 2. 备用方案：通过 PowerShell 获取默认网关（绝对可靠且与语言无关）
+	psCmd := "Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object Metric | Select-Object -ExpandProperty NextHop -First 1"
+	outPS, errPS := exec.Command("powershell", "-Command", psCmd).Output()
+	if errPS == nil {
+		gw := strings.TrimSpace(string(outPS))
+		ip := net.ParseIP(gw)
+		if ip != nil && ip.To4() != nil && gw != "0.0.0.0" && gw != excludeGateway {
+			return gw
+		}
+	}
+
 	return ""
 }
 
@@ -35,6 +50,15 @@ func getDefaultGatewayWindows(excludeGateway string) string {
 func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+
+	// 关键：用 recover 区分正常退出与 panic
+	defer func() {
+		if r := recover(); r != nil { // 只有 panic 时 r 才非 nil
+			log.Printf("[Windows-VPN] Panic recovered: %v", r)
+			// err := fmt.Errorf("StartVPN panicked, cleaning up routing: %v", r)
+			v.cleanupRouting() // ← 仅在此处清理残留路由
+		}
+	}()
 
 	if v.active {
 		return nil
@@ -75,6 +99,14 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.active = true
 	log.Printf("[Windows-VPN] VPN started successfully, active=true")
 	return nil
+}
+
+// cleanupRouting 删除崩溃残留的默认路由并恢复原始网关
+func (v *VPNServiceManager) cleanupRouting() {
+	_ = exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0", v.gateway).Run()
+	if v.originalGateway != "" {
+		_ = exec.Command("route", "add", "0.0.0.0", "mask", "0.0.0.0", v.originalGateway, "metric", "25").Run()
+	}
 }
 
 // StopVPN stops Windows Wintun tunnel and restores system routing.
