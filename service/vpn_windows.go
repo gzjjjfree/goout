@@ -5,40 +5,33 @@ package service
 import (
 	"fmt"
 	"log"
+	"net"
 	"os/exec"
-	"syscall"
-	"unsafe"
+	"strings"
 
 	"github.com/gzjjjfree/goout/data"
 	"github.com/gzjjjfree/goout/jni"
 )
 
-var (
-	wintunSession uintptr
-	wintunAdapter uintptr
-	wintunRunning bool
-
-	// Wintun transmit buffer and send procedure used to write packets back into the virtual adapter.
-	wintunTransmitBuffer unsafe.Pointer
-	wintunTransmitSize   uint32
-	sendPacketProc       *syscall.Proc
-)
-
-var (
-	modkernel32             = syscall.NewLazyDLL("kernel32.dll")
-	procWaitForSingleObject = modkernel32.NewProc("WaitForSingleObject")
-)
-
-const (
-	WAIT_TIMEOUT = 258
-)
-
-func waitForSingleObject(handle uintptr, milliseconds uint32) uint32 {
-	ret, _, _ := procWaitForSingleObject.Call(handle, uintptr(milliseconds))
-	return uint32(ret)
+func getDefaultGatewayWindows(excludeGateway string) string {
+	out, err := exec.Command("route", "print", "0.0.0.0").Output()
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && fields[0] == "0.0.0.0" && fields[1] == "0.0.0.0" {
+			gateway := fields[2]
+			if net.ParseIP(gateway) != nil && gateway != "0.0.0.0" && gateway != excludeGateway {
+				return gateway
+			}
+		}
+	}
+	return ""
 }
 
-// StartVPN initializes Windows Wintun virtual network adapter and routing table for global proxy.
+// StartVPN initializes Windows Wintun virtual network adapter and routing table for global proxy using tun2socks engine.
 func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -47,61 +40,30 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		return nil
 	}
 
-	// 初始化全局取消上下文，确保随时可瞬间打断
 	jni.InitProxyContext()
 
 	log.Printf("[Windows-VPN] Starting Wintun TUN interface & routing table: IP=%s, Gateway=%s, SOCKS=%s", v.tunIP, v.gateway, socksAddr)
 
-	// Ensure wintun.dll is available in execution directory
 	data.EnsureWintunDLL()
 
-	// Load wintun.dll
-	dll, err := syscall.LoadDLL("wintun.dll")
-	if err != nil {
-		log.Printf("[Windows-VPN] Failed to load wintun.dll: %v (falling back to netsh/simulation mode)", err)
-	} else {
-		defer dll.Release()
-		createAdapter, errCreate := dll.FindProc("WintunCreateAdapter")
-		startSession, errSession := dll.FindProc("WintunStartSession")
+	v.originalGateway = getDefaultGatewayWindows(v.gateway)
+	log.Printf("[Windows-VPN] Recorded original default gateway: %s", v.originalGateway)
 
-		if errCreate == nil && errSession == nil {
-			namePtr, _ := syscall.UTF16PtrFromString("GoOutTUN")
-			typePtr, _ := syscall.UTF16PtrFromString("GoOut")
-
-			adapter, _, _ := createAdapter.Call(
-				uintptr(unsafe.Pointer(namePtr)),
-				uintptr(unsafe.Pointer(typePtr)),
-				0, // GUID
-			)
-			if adapter != 0 {
-				wintunAdapter = adapter
-				session, _, _ := startSession.Call(adapter, 0x800000) // 8MB ring buffer capacity
-				if session != 0 {
-					wintunSession = session
-					wintunRunning = true
-					log.Println("[Windows-VPN] Wintun session started successfully.")
-
-					// Start Wintun packet processing loop
-					go startWintunPacketLoop(session, v.tunIP, v.gateway, socksAddr)
-				}
-			}
-		}
-	}
+	// Start tun2socks engine with wintun://GoOutTUN
+	jni.StartTun2Socks(-1, v.tunIP, v.gateway, socksAddr)
 
 	// Configure Windows routing / netsh interface address for GoOutTUN
-	cmdStr := fmt.Sprintf("netsh interface ipv4 set address name=\"GoOutTUN\" source=static addr=%s mask=255.255.255.0 gateway=%s", v.tunIP, v.gateway)
+	cmdStr := fmt.Sprintf("netsh interface ipv4 set address name=GoOutTUN source=static addr=%s mask=255.255.255.0 gateway=%s", v.tunIP, v.gateway)
 	log.Printf("[Windows-VPN] Executing command: %s", cmdStr)
-	cmd := exec.Command("netsh", "interface", "ipv4", "set", "address", "name=\"GoOutTUN\"", "source=static", "addr="+v.tunIP, "mask=255.255.255.0", "gateway="+v.gateway)
+	cmd := exec.Command("netsh", "interface", "ipv4", "set", "address", "name=GoOutTUN", "source=static", "addr="+v.tunIP, "mask=255.255.255.0", "gateway="+v.gateway)
 	if err := cmd.Run(); err != nil {
 		log.Printf("[Windows-VPN] netsh execution warning/error: %v (Note: if GoOutTUN interface does not exist yet, this may fail until created)", err)
 	} else {
 		log.Printf("[Windows-VPN] netsh executed successfully.")
 	}
 
-	// 先尝试删除可能冲突的旧默认路由
 	_ = exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0", v.gateway).Run()
 
-	// 添加新的全局路由指向 GoOutTUN
 	routeCmd := exec.Command("route", "add", "0.0.0.0", "mask", "0.0.0.0", v.gateway, "metric", "5")
 	log.Printf("[Windows-VPN] Executing route command: route add 0.0.0.0 mask 0.0.0.0 %s metric 5", v.gateway)
 	if errRoute := routeCmd.Run(); errRoute != nil {
@@ -110,117 +72,12 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		log.Println("[Windows-VPN] Global default route added successfully to GoOutTUN.")
 	}
 
-	simulatedFD := -1
-	if wintunRunning {
-		simulatedFD = -2 // Wintun active mode (handled natively via Wintun ring buffer loop)
-	}
-	log.Printf("[Windows-VPN] Calling jni.StartTun2Socks with simulatedFD=%d, tunIP=%s, gateway=%s, socksAddr=%s", simulatedFD, v.tunIP, v.gateway, socksAddr)
-	jni.StartTun2Socks(simulatedFD, v.tunIP, v.gateway, socksAddr)
-	log.Printf("[Windows-VPN] jni.StartTun2Socks invoked successfully.")
-
 	v.active = true
 	log.Printf("[Windows-VPN] VPN started successfully, active=true")
 	return nil
 }
 
-func startWintunPacketLoop(session uintptr, tunIP, gateway, socksAddr string) {
-	log.Printf("[Wintun-Tunnel] Starting Wintun packet reading loop for SOCKS5 proxy: %s", socksAddr)
-	dll, err := syscall.LoadDLL("wintun.dll")
-	if err != nil {
-		log.Printf("[Wintun-Tunnel] Failed to load wintun.dll for packet loop: %v", err)
-		return
-	}
-	defer dll.Release()
-
-	getReadWaitEvent, _ := dll.FindProc("WintunGetReadWaitEvent")
-	receivePacket, _ := dll.FindProc("WintunReceivePacket")
-	receiveReleasePacket, _ := dll.FindProc("WintunReleaseReceivePacket")
-	getTransmitBuffer, _ := dll.FindProc("WintunGetTransmitBuffer")
-	sendPacket, _ := dll.FindProc("WintunSendPacket")
-
-	if getReadWaitEvent == nil || receivePacket == nil || receiveReleasePacket == nil {
-		log.Println("[Wintun-Tunnel] Failed to find required Wintun packet procedures")
-		return
-	}
-
-	readWaitEvent, _, _ := getReadWaitEvent.Call(session)
-	if readWaitEvent == 0 {
-		log.Println("[Wintun-Tunnel] Failed to get Wintun read wait event")
-		return
-	}
-
-	// Acquire the transmit buffer so we can write packets back into the adapter.
-	if getTransmitBuffer != nil && sendPacket != nil {
-		var transmitSize uint32
-		transmitPtr, _, _ := getTransmitBuffer.Call(session, uintptr(unsafe.Pointer(&transmitSize)))
-		if transmitPtr != 0 && transmitSize > 0 {
-			wintunTransmitBuffer = unsafe.Pointer(transmitPtr)
-			wintunTransmitSize = transmitSize
-			sendPacketProc = sendPacket
-			log.Printf("[Wintun-Tunnel] Wintun transmit buffer ready (size=%d)", transmitSize)
-		} else {
-			log.Println("[Wintun-Tunnel] Failed to acquire Wintun transmit buffer; send path disabled")
-		}
-	}
-
-	for wintunRunning {
-		ret := waitForSingleObject(readWaitEvent, 50)
-		if ret == WAIT_TIMEOUT {
-			continue
-		}
-		if !wintunRunning {
-			break
-		}
-
-		var packetSize uint32
-		packetPtr, _, _ := receivePacket.Call(session, uintptr(unsafe.Pointer(&packetSize)))
-		if packetPtr != 0 {
-			if packetSize > 0 {
-				// Clone the payload because releasing invalidates the ring buffer memory.
-				copied := make([]byte, packetSize)
-				copy(copied, unsafe.Slice((*byte)(unsafe.Pointer(packetPtr)), packetSize))
-				go processWintunPacket(session, tunIP, gateway, socksAddr, copied)
-			}
-			receiveReleasePacket.Call(session, packetPtr)
-		}
-	}
-	log.Println("[Wintun-Tunnel] Wintun packet loop stopped.")
-}
-
-// processWintunPacket forwards a cloned IP packet through the shared forwarding engine and
-// writes any ICMP reply back into the Wintun transmit buffer using correct dynamic allocation.
-func processWintunPacket(session uintptr, tunIP, gateway, socksAddr string, packet []byte) {
-	jni.ForwardPacket(packet, tunIP, gateway, socksAddr, func(reply []byte) {
-		// 加载动态发送所需的 proc
-		dll, err := syscall.LoadDLL("wintun.dll")
-		if err != nil {
-			return
-		}
-		defer dll.Release()
-
-		getTransmitBuffer, _ := dll.FindProc("WintunGetTransmitBuffer")
-		sendPacket, _ := dll.FindProc("WintunSendPacket")
-		if getTransmitBuffer == nil || sendPacket == nil {
-			return
-		}
-
-		var transmitSize uint32 = uint32(len(reply))
-		// 每次发送前必须实时向 Wintun 申请一块对应大小的发送缓冲区
-		transmitPtr, _, _ := getTransmitBuffer.Call(session, uintptr(transmitSize))
-		if transmitPtr == 0 {
-			return
-		}
-
-		// 将回复包数据拷贝到 Wintun 分配的内存中
-		destSlice := unsafe.Slice((*byte)(unsafe.Pointer(transmitPtr)), transmitSize)
-		copy(destSlice, reply)
-
-		// 调用 WintunSendPacket 提交发送
-		sendPacket.Call(session, transmitPtr)
-	})
-}
-
-// StopVPN 瞬间停止 Windows Wintun 隧道与所有网络连接，绝不拖延
+// StopVPN stops Windows Wintun tunnel and restores system routing.
 func (v *VPNServiceManager) StopVPN() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -231,33 +88,17 @@ func (v *VPNServiceManager) StopVPN() error {
 
 	log.Println("[Windows-VPN] Stopping Windows Wintun tunnel instantly...")
 
-	// 1. 【最关键】瞬间取消所有正在进行的网络 Dial 和代理传输，不等待任何网络回应
 	jni.CancelProxyContext()
+	jni.StopTun2Socks()
 
-	// 2. 标志位设为 false，停止 Wintun 读取循环
-	wintunRunning = false
-
-	// 3. 立即关闭 Wintun Session 与 Adapter
-	if wintunSession != 0 {
-		if wintunDll, err := syscall.LoadDLL("wintun.dll"); err == nil {
-			if endSession, err := wintunDll.FindProc("WintunEndSession"); err == nil && endSession != nil {
-				_, _, _ = endSession.Call(wintunSession)
-			}
-			if closeAdapter, err := wintunDll.FindProc("WintunCloseAdapter"); err == nil && closeAdapter != nil {
-				_, _, _ = closeAdapter.Call(wintunAdapter)
-			}
-			_ = wintunDll.Release()
-		}
-		wintunSession = 0
-		wintunAdapter = 0
-	}
-
-	// 4. 将耗时的网卡删除命令放入后台异步执行，确保 StopVPN 毫秒级返回，绝不卡 UI
+	origGw := v.originalGateway
+	v.originalGateway = ""
 	go func() {
-		cmd := exec.Command("netsh", "interface", "ipv4", "delete", "interface", "GoOutTUN")
-		_ = cmd.Run()
-		// 停止 VPN 时删除该全局路由
-		_ = exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0").Run()
+		_ = exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0", v.gateway).Run()
+		if origGw != "" {
+			_ = exec.Command("route", "add", "0.0.0.0", "mask", "0.0.0.0", origGw, "metric", "25").Run()
+			log.Printf("[Windows-VPN] Restored original default gateway: %s", origGw)
+		}
 	}()
 
 	v.active = false

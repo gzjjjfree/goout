@@ -6,11 +6,12 @@ import (
 
 // VPNServiceManager handles cross-platform VPN/TUN lifecycle and routing configuration.
 type VPNServiceManager struct {
-	mu        sync.Mutex
-	active    bool
-	tunIP     string
-	gateway   string
-	dnsServer string
+	mu              sync.Mutex
+	active          bool
+	tunIP           string
+	gateway         string
+	dnsServer       string
+	originalGateway string
 }
 
 func NewVPNServiceManager(tunIP, gateway string) *VPNServiceManager {

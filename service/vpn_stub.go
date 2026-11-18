@@ -34,6 +34,7 @@ func (v *VPNServiceManager) StopVPN() error {
 	}
 
 	log.Println("[Stub-VPN] Stopping cross-platform TUN simulation")
+	jni.StopTun2Socks()
 	v.active = false
 	return nil
 }
