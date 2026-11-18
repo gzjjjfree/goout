@@ -98,6 +98,18 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		log.Printf("[Windows-VPN] netsh executed successfully.")
 	}
 
+	// 先尝试删除可能冲突的旧默认路由
+	_ = exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0", v.gateway).Run()
+
+	// 添加新的全局路由指向 GoOutTUN
+	routeCmd := exec.Command("route", "add", "0.0.0.0", "mask", "0.0.0.0", v.gateway, "metric", "5")
+	log.Printf("[Windows-VPN] Executing route command: route add 0.0.0.0 mask 0.0.0.0 %s metric 5", v.gateway)
+	if errRoute := routeCmd.Run(); errRoute != nil {
+		log.Printf("[Windows-VPN] Failed to add default route: %v", errRoute)
+	} else {
+		log.Println("[Windows-VPN] Global default route added successfully to GoOutTUN.")
+	}
+
 	simulatedFD := -1
 	if wintunRunning {
 		simulatedFD = -2 // Wintun active mode (handled natively via Wintun ring buffer loop)
@@ -244,6 +256,8 @@ func (v *VPNServiceManager) StopVPN() error {
 	go func() {
 		cmd := exec.Command("netsh", "interface", "ipv4", "delete", "interface", "GoOutTUN")
 		_ = cmd.Run()
+		// 停止 VPN 时删除该全局路由
+		_ = exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0").Run()
 	}()
 
 	v.active = false
