@@ -15,7 +15,6 @@ import (
 )
 
 func getDefaultGatewayWindows(excludeGateway string) string {
-	// 1. 尝试通过 route print 获取默认网关（兼容中英文 Windows 输出）
 	out, err := exec.Command("route", "print", "0.0.0.0").Output()
 	if err == nil {
 		lines := strings.Split(string(out), "\n")
@@ -33,7 +32,6 @@ func getDefaultGatewayWindows(excludeGateway string) string {
 		}
 	}
 
-	// 2. 备用方案：通过 PowerShell 获取默认网关（绝对可靠且与语言无关）
 	psCmd := "Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object Metric | Select-Object -ExpandProperty NextHop -First 1"
 	outPS, errPS := exec.Command("powershell", "-Command", psCmd).Output()
 	if errPS == nil {
@@ -52,12 +50,10 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	// 关键：用 recover 区分正常退出与 panic
 	defer func() {
-		if r := recover(); r != nil { // 只有 panic 时 r 才非 nil
+		if r := recover(); r != nil {
 			log.Printf("[Windows-VPN] Panic recovered: %v", r)
-			// err := fmt.Errorf("StartVPN panicked, cleaning up routing: %v", r)
-			v.cleanupRouting() // ← 仅在此处清理残留路由
+			v.cleanupRouting()
 		}
 	}()
 
@@ -76,7 +72,6 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		log.Printf("[Windows-VPN] WARNING: wintun.dll stat failed: %v", err)
 	}
 
-	// 检查管理员权限
 	if cmdAdmin := exec.Command("net", "session"); cmdAdmin.Run() != nil {
 		log.Println("[Windows-VPN] CRITICAL WARNING: Not running as Administrator! Wintun creation will likely fail or crash.")
 	} else {
@@ -98,10 +93,15 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	log.Printf("[Windows-VPN] Executing command: %s", cmdStr)
 	cmd := exec.Command("netsh", "interface", "ipv4", "set", "address", "name=GoOutTUN", "source=static", "addr="+v.tunIP, "mask=255.255.255.0", "gateway="+v.gateway)
 	if err := cmd.Run(); err != nil {
-		log.Printf("[Windows-VPN] netsh execution warning/error: %v (Note: if GoOutTUN interface does not exist yet, this may fail until created)", err)
+		log.Printf("[Windows-VPN] netsh execution warning/error: %v", err)
 	} else {
 		log.Printf("[Windows-VPN] netsh executed successfully.")
 	}
+
+	// 禁用 GoOutTUN 网卡的 NetBIOS，彻底阻止广播和 137/138 端口流量进入 TUN 栈
+	psDisableNetBIOS := fmt.Sprintf("Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.IPAddress -contains '%s' } | ForEach-Object { $_.SetTcpIPNetbios(2) }", v.tunIP)
+	_ = exec.Command("powershell", "-Command", psDisableNetBIOS).Run()
+	log.Println("[Windows-VPN] NetBIOS disabled on GoOutTUN interface successfully.")
 
 	_ = exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0", v.gateway).Run()
 
@@ -118,7 +118,6 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	return nil
 }
 
-// cleanupRouting 删除崩溃残留的默认路由并恢复原始网关
 func (v *VPNServiceManager) cleanupRouting() {
 	_ = exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0", v.gateway).Run()
 	if v.originalGateway != "" {
