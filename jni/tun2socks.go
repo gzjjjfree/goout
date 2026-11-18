@@ -56,8 +56,9 @@ func StartTun2Socks(fd int, tunAddr, gateway, socksServer string) error {
 
 	log.Printf("[Tun2Socks] Inserting engine config: Device=%s, Proxy=%s", deviceStr, proxyURL)
 	engine.Insert(&engine.Key{
-		Device: deviceStr,
-		Proxy:  proxyURL,
+		Device:   deviceStr,
+		Proxy:    proxyURL,
+		LogLevel: "info",
 	})
 
 	engine.Start()
