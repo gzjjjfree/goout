@@ -9,16 +9,33 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gzjjjfree/goout/data"
 	"github.com/gzjjjfree/goout/jni"
 )
 
+func runHiddenCommand(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow: true,
+	}
+	return cmd.CombinedOutput()
+}
+
+func runHiddenCommandRun(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow: true,
+	}
+	return cmd.Run()
+}
+
 // getInterfaceIndexByName 获取指定网卡名称的 Windows 接口索引 (ifIndex)
 func getInterfaceIndexByName(alias string) string {
 	psCmd := fmt.Sprintf("(Get-NetAdapter -Name '%s' -ErrorAction SilentlyContinue).ifIndex", alias)
-	out, err := exec.Command("powershell", "-Command", psCmd).Output()
+	out, err := runHiddenCommand("powershell", "-Command", psCmd)
 	if err == nil {
 		idx := strings.TrimSpace(string(out))
 		if idx != "" {
@@ -31,7 +48,7 @@ func getInterfaceIndexByName(alias string) string {
 // getDefaultGatewayWindows 获取物理网卡的默认网关，用于为代理服务器添加防回环直连路由
 func getDefaultGatewayWindows(excludeGateway string) string {
 	psCmd := fmt.Sprintf("Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Where-Object { $_.NextHop -ne '%s' -and $_.NextHop -ne '0.0.0.0' } | Sort-Object RouteMetric | Select-Object -ExpandProperty NextHop -First 1", excludeGateway)
-	outPS, errPS := exec.Command("powershell", "-Command", psCmd).Output()
+	outPS, errPS := runHiddenCommand("powershell", "-Command", psCmd)
 	if errPS == nil {
 		gw := strings.TrimSpace(string(outPS))
 		ip := net.ParseIP(gw)
@@ -69,7 +86,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		log.Printf("[Windows-VPN] WARNING: wintun.dll stat failed: %v", err)
 	}
 
-	if cmdAdmin := exec.Command("net", "session"); cmdAdmin.Run() != nil {
+	if errAdmin := runHiddenCommandRun("net", "session"); errAdmin != nil {
 		log.Println("[Windows-VPN] CRITICAL WARNING: Not running as Administrator! Wintun creation will likely fail or crash.")
 	} else {
 		log.Println("[Windows-VPN] Running with Administrator privileges confirmed.")
@@ -89,7 +106,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 
 	if v.originalGateway != "" {
 		for _, host := range v.proxyHosts {
-			errRoute := exec.Command("route", "add", host, "mask", "255.255.255.255", v.originalGateway, "metric", "1").Run()
+			errRoute := runHiddenCommandRun("route", "add", host, "mask", "255.255.255.255", v.originalGateway, "metric", "1")
 			if errRoute != nil {
 				log.Printf("[Windows-VPN] Failed to add direct /32 route for proxy host %s: %v", host, errRoute)
 			} else {
@@ -101,7 +118,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	// 添加 /32 直连物理网关路由，使 DNS 请求直接发往公网 dnsServer 而不走 TUN 隧道
 	if v.originalGateway != "" && net.ParseIP(v.dnsServer) != nil {
 		v.logPrintf("[Windows-VPN-DNS] Configuring DNS bypass routing for DNS server: %s via physical gateway: %s", v.dnsServer, v.originalGateway)
-		errRoute := exec.Command("route", "add", v.dnsServer, "mask", "255.255.255.255", v.originalGateway, "metric", "1").Run()
+		errRoute := runHiddenCommandRun("route", "add", v.dnsServer, "mask", "255.255.255.255", v.originalGateway, "metric", "1")
 		if errRoute != nil {
 			v.logPrintf("[Windows-VPN-DNS] Failed to add direct /32 route for DNS server %s: %v", v.dnsServer, errRoute)
 		} else {
@@ -122,17 +139,17 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	time.Sleep(300 * time.Millisecond)
 
 	// 2. 配置 GoOutTUN 的静态 IP 地址
-	cmd := exec.Command("netsh", "interface", "ipv4", "set", "address", "name=GoOutTUN", "source=static", "addr="+v.tunIP, "mask=255.255.255.0")
-	if err := cmd.Run(); err != nil {
-		log.Printf("[Windows-VPN] netsh set address warning: %v", err)
+	errNetsh := runHiddenCommandRun("netsh", "interface", "ipv4", "set", "address", "name=GoOutTUN", "source=static", "addr="+v.tunIP, "mask=255.255.255.0")
+	if errNetsh != nil {
+		log.Printf("[Windows-VPN] netsh set address warning: %v", errNetsh)
 	} else {
 		log.Println("[Windows-VPN] netsh IP address set successfully.")
 	}
 
 	// 3. 优化网卡 MTU 为 1400，防止大包（如 TLS ClientHello）被静默丢弃
-	mtuCmd := exec.Command("netsh", "interface", "ipv4", "set", "subinterface", "GoOutTUN", "mtu=1400", "store=persistent")
-	if err := mtuCmd.Run(); err != nil {
-		log.Printf("[Windows-VPN] netsh set mtu warning: %v", err)
+	errMtu := runHiddenCommandRun("netsh", "interface", "ipv4", "set", "subinterface", "GoOutTUN", "mtu=1400", "store=persistent")
+	if errMtu != nil {
+		log.Printf("[Windows-VPN] netsh set mtu warning: %v", errMtu)
 	} else {
 		log.Println("[Windows-VPN] GoOutTUN MTU set to 1400 successfully.")
 	}
@@ -143,16 +160,16 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		dnsServer = "1.1.1.1"
 	}
 	v.logPrintf("[Windows-VPN-DNS] Setting GoOutTUN interface static DNS server to: %s (DNS request flow entering TUN tunnel)", dnsServer)
-	dnsCmd := exec.Command("netsh", "interface", "ip", "set", "dns", "name=GoOutTUN", "static", dnsServer)
-	if err := dnsCmd.Run(); err != nil {
-		v.logPrintf("[Windows-VPN-DNS] netsh set dns warning: %v", err)
+	errDns := runHiddenCommandRun("netsh", "interface", "ip", "set", "dns", "name=GoOutTUN", "static", dnsServer)
+	if errDns != nil {
+		v.logPrintf("[Windows-VPN-DNS] netsh set dns warning: %v", errDns)
 	} else {
 		v.logPrintf("[Windows-VPN-DNS] GoOutTUN static DNS set to %s successfully. DNS requests will now be intercepted and resolved through tunnel/proxy.", dnsServer)
 	}
 
 	// 5. 禁用 GoOutTUN 网卡的 NetBIOS，阻止 137/138 端口局域网广播进入 TUN
 	psDisableNetBIOS := fmt.Sprintf("Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.IPAddress -contains '%s' } | ForEach-Object { $_.SetTcpIPNetbios(2) }", v.tunIP)
-	_ = exec.Command("powershell", "-Command", psDisableNetBIOS).Run()
+	_ = runHiddenCommandRun("powershell", "-Command", psDisableNetBIOS)
 
 	// 6. 获取 GoOutTUN 的接口索引 (ifIndex)
 	tunIfIndex := getInterfaceIndexByName("GoOutTUN")
@@ -164,11 +181,11 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	// 8. 添加两条 /1 路由（0.0.0.0/1 和 128.0.0.0/1），下一跳设为 0.0.0.0 (on-link) 并绑定到 GoOutTUN 接口
 	var err1, err2 error
 	if tunIfIndex != "" {
-		err1 = exec.Command("route", "add", "0.0.0.0", "mask", "128.0.0.0", "0.0.0.0", "metric", "5", "if", tunIfIndex).Run()
-		err2 = exec.Command("route", "add", "128.0.0.0", "mask", "128.0.0.0", "0.0.0.0", "metric", "5", "if", tunIfIndex).Run()
+		err1 = runHiddenCommandRun("route", "add", "0.0.0.0", "mask", "128.0.0.0", "0.0.0.0", "metric", "5", "if", tunIfIndex)
+		err2 = runHiddenCommandRun("route", "add", "128.0.0.0", "mask", "128.0.0.0", "0.0.0.0", "metric", "5", "if", tunIfIndex)
 	} else {
-		err1 = exec.Command("route", "add", "0.0.0.0", "mask", "128.0.0.0", "0.0.0.0", "metric", "5").Run()
-		err2 = exec.Command("route", "add", "128.0.0.0", "mask", "128.0.0.0", "0.0.0.0", "metric", "5").Run()
+		err1 = runHiddenCommandRun("route", "add", "0.0.0.0", "mask", "128.0.0.0", "0.0.0.0", "metric", "5")
+		err2 = runHiddenCommandRun("route", "add", "128.0.0.0", "mask", "128.0.0.0", "0.0.0.0", "metric", "5")
 	}
 
 	if err1 != nil || err2 != nil {
@@ -184,26 +201,25 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 
 // cleanupRouting 清理添加的两条 /1 路由及所有代理 IP / DNS 直连 /32 路由
 func (v *VPNServiceManager) cleanupRouting() {
-	_ = exec.Command("route", "delete", "0.0.0.0", "mask", "128.0.0.0").Run()
-	_ = exec.Command("route", "delete", "128.0.0.0", "mask", "128.0.0.0").Run()
+	_ = runHiddenCommandRun("route", "delete", "0.0.0.0", "mask", "128.0.0.0")
+	_ = runHiddenCommandRun("route", "delete", "128.0.0.0", "mask", "128.0.0.0")
 	for _, host := range v.proxyHosts {
-		_ = exec.Command("route", "delete", host, "mask", "255.255.255.255").Run()
-		_ = exec.Command("route", "delete", host).Run()
+		_ = runHiddenCommandRun("route", "delete", host, "mask", "255.255.255.255")
+		_ = runHiddenCommandRun("route", "delete", host)
 	}
 	if v.socksHost != "" {
-		_ = exec.Command("route", "delete", v.socksHost, "mask", "255.255.255.255").Run()
-		_ = exec.Command("route", "delete", v.socksHost).Run()
+		_ = runHiddenCommandRun("route", "delete", v.socksHost, "mask", "255.255.255.255")
+		_ = runHiddenCommandRun("route", "delete", v.socksHost)
 	}
 	if v.dnsServer != "" {
-		_ = exec.Command("route", "delete", v.dnsServer, "mask", "255.255.255.255").Run()
-		_ = exec.Command("route", "delete", v.dnsServer).Run()
+		_ = runHiddenCommandRun("route", "delete", v.dnsServer, "mask", "255.255.255.255")
+		_ = runHiddenCommandRun("route", "delete", v.dnsServer)
 	}
-	// 确保 127.0.0.1 回环路由存在，防止断开 VPN 后 127.0.0.1 路由丢失导致无法上网
-	// Windows 中添加直连/on-link路由应使用网关 0.0.0.0
-	if errAdd := exec.Command("route", "add", "127.0.0.1", "mask", "255.255.255.255", "0.0.0.0").Run(); errAdd != nil {
+	// 确保 127.0.0.1 回环路由存在，通过 if 1 绑定回环接口并让 Windows 自动分配默认跃点数
+	if errAdd := runHiddenCommandRun("route", "add", "127.0.0.1", "mask", "255.255.255.255", "0.0.0.0", "if", "1"); errAdd != nil {
 		log.Printf("[Windows-VPN] Failed to restore 127.0.0.1 loopback route: %v", errAdd)
 	} else {
-		log.Println("[Windows-VPN] Restored 127.0.0.1 loopback route successfully.")
+		log.Println("[Windows-VPN] Restored 127.0.0.1 loopback route successfully (if 1).")
 	}
 }
 
