@@ -215,11 +215,11 @@ func (v *VPNServiceManager) cleanupRouting() {
 		_ = runHiddenCommandRun("route", "delete", v.dnsServer, "mask", "255.255.255.255")
 		_ = runHiddenCommandRun("route", "delete", v.dnsServer)
 	}
-	// 确保 127.0.0.1 回环路由存在，通过 if 1 绑定回环接口并让 Windows 自动分配默认跃点数
-	if errAdd := runHiddenCommandRun("route", "add", "127.0.0.1", "mask", "255.255.255.255", "0.0.0.0", "if", "1"); errAdd != nil {
+	// 确保 127.0.0.1 回环路由存在，恢复原系统路由的接口（if 1）与跃点数（metric 331）
+	if errAdd := runHiddenCommandRun("route", "add", "127.0.0.1", "mask", "255.255.255.255", "0.0.0.0", "metric", "331", "if", "1"); errAdd != nil {
 		log.Printf("[Windows-VPN] Failed to restore 127.0.0.1 loopback route: %v", errAdd)
 	} else {
-		log.Println("[Windows-VPN] Restored 127.0.0.1 loopback route successfully (if 1).")
+		log.Println("[Windows-VPN] Restored 127.0.0.1 loopback route successfully (metric 331, if 1).")
 	}
 }
 
