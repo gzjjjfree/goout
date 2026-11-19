@@ -10,7 +10,7 @@
     "inbounds": [
         {
             "tag": "gz",
-            "port": 10818,
+            "port": 10808,
             "listen": "127.0.0.1",
             "protocol": "socks",
             "sniffing": {

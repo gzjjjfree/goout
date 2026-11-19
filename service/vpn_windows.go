@@ -100,12 +100,15 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 
 	// 添加 /32 直连物理网关路由，使 DNS 请求直接发往公网 dnsServer 而不走 TUN 隧道
 	if v.originalGateway != "" && net.ParseIP(v.dnsServer) != nil {
+		v.logPrintf("[Windows-VPN-DNS] Configuring DNS bypass routing for DNS server: %s via physical gateway: %s", v.dnsServer, v.originalGateway)
 		errRoute := exec.Command("route", "add", v.dnsServer, "mask", "255.255.255.255", v.originalGateway, "metric", "1").Run()
 		if errRoute != nil {
-			log.Printf("[Windows-VPN] Failed to add direct /32 route for DNS server %s: %v", v.dnsServer, errRoute)
+			v.logPrintf("[Windows-VPN-DNS] Failed to add direct /32 route for DNS server %s: %v", v.dnsServer, errRoute)
 		} else {
-			log.Printf("[Windows-VPN] Added direct /32 route for DNS server %s via physical gateway %s", v.dnsServer, v.originalGateway)
+			v.logPrintf("[Windows-VPN-DNS] Added direct /32 route for DNS server %s via physical gateway %s successfully", v.dnsServer, v.originalGateway)
 		}
+	} else {
+		v.logPrintf("[Windows-VPN-DNS] Skipping direct /32 route for DNS server: originalGateway=%s, dnsServer=%s", v.originalGateway, v.dnsServer)
 	}
 
 	// 1. 启动 tun2socks 引擎（会自动创建 GoOutTUN 网卡）
@@ -139,11 +142,12 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	if dnsServer == "" {
 		dnsServer = "1.1.1.1"
 	}
+	v.logPrintf("[Windows-VPN-DNS] Setting GoOutTUN interface static DNS server to: %s (DNS request flow entering TUN tunnel)", dnsServer)
 	dnsCmd := exec.Command("netsh", "interface", "ip", "set", "dns", "name=GoOutTUN", "static", dnsServer)
 	if err := dnsCmd.Run(); err != nil {
-		log.Printf("[Windows-VPN] netsh set dns warning: %v", err)
+		v.logPrintf("[Windows-VPN-DNS] netsh set dns warning: %v", err)
 	} else {
-		log.Printf("[Windows-VPN] GoOutTUN static DNS set to %s successfully.", dnsServer)
+		v.logPrintf("[Windows-VPN-DNS] GoOutTUN static DNS set to %s successfully. DNS requests will now be intercepted and resolved through tunnel/proxy.", dnsServer)
 	}
 
 	// 5. 禁用 GoOutTUN 网卡的 NetBIOS，阻止 137/138 端口局域网广播进入 TUN
@@ -195,7 +199,12 @@ func (v *VPNServiceManager) cleanupRouting() {
 		_ = exec.Command("route", "delete", v.dnsServer).Run()
 	}
 	// 确保 127.0.0.1 回环路由存在，防止断开 VPN 后 127.0.0.1 路由丢失导致无法上网
-	_ = exec.Command("route", "add", "127.0.0.1", "mask", "255.255.255.255", "127.0.0.1").Run()
+	// Windows 中添加直连/on-link路由应使用网关 0.0.0.0
+	if errAdd := exec.Command("route", "add", "127.0.0.1", "mask", "255.255.255.255", "0.0.0.0").Run(); errAdd != nil {
+		log.Printf("[Windows-VPN] Failed to restore 127.0.0.1 loopback route: %v", errAdd)
+	} else {
+		log.Println("[Windows-VPN] Restored 127.0.0.1 loopback route successfully.")
+	}
 }
 
 // StopVPN stops Windows Wintun tunnel and restores system routing.

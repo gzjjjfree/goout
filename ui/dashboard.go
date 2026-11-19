@@ -48,7 +48,7 @@ func SetupDashboard(w fyne.Window) {
 	}
 
 	v2rayMgr := core.GetManager(onLog)
-	vpnMgr := service.NewVPNServiceManager(cfg.TunIP, "10.0.0.1")
+	vpnMgr := service.NewVPNServiceManager(cfg.TunIP, "10.0.0.1", onLog)
 
 	statusLabel := widget.NewLabel("状态: 已停止")
 	var v2rayBtn *widget.Button
@@ -136,7 +136,7 @@ func SetupDashboard(w fyne.Window) {
 				cfg.SocksPort = 10808
 				_ = data.SaveConfig("config_save.json", cfg)
 
-				socksAddr := "127.0.0.1:10808"
+				socksAddr := fmt.Sprintf("127.0.0.1:%d", cfg.SocksPort)
 				log.Printf("[Dashboard] Attempting to start VPN manager, SOCKS addr: %s", socksAddr)
 				err := vpnMgr.StartVPN(socksAddr)
 				if err != nil {
@@ -303,9 +303,25 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 		list := getInboundsList()
 		newInbound := map[string]interface{}{
 			"tag":      "in-" + strconv.Itoa(len(list)+1),
-			"port":     1080 + len(list),
+			"port":     10808 + len(list),
 			"listen":   "127.0.0.1",
 			"protocol": "socks",
+			"sniffing": map[string]interface{}{
+				"enabled": true,
+				"destOverride": []interface{}{
+					"http",
+					"tls",
+				},
+				"metadataOnly": false,
+			},
+			"settings": map[string]interface{}{
+				"auth":    "noauth",
+				"udp":     true,
+				"ip":      nil,
+				"address": nil,
+				"clients": nil,
+			},
+			"streamSettings": nil,
 		}
 		list = append(list, newInbound)
 		rawCfg["inbounds"] = list
@@ -568,6 +584,10 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 						"User-Agent": "",
 					},
 				},
+			},
+			"mux": map[string]interface{}{
+				"enabled":     true,
+				"concurrency": 8,
 			},
 		}
 		list = append(list, newOut)

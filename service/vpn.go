@@ -2,6 +2,8 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"net"
 	"os"
 	"sync"
@@ -17,13 +19,23 @@ type VPNServiceManager struct {
 	originalGateway string
 	socksHost       string
 	proxyHosts      []string
+	onLog           func(string)
 }
 
-func NewVPNServiceManager(tunIP, gateway string) *VPNServiceManager {
+func NewVPNServiceManager(tunIP, gateway string, onLog func(string)) *VPNServiceManager {
 	return &VPNServiceManager{
 		tunIP:     tunIP,
 		gateway:   gateway,
 		dnsServer: "8.8.8.8",
+		onLog:     onLog,
+	}
+}
+
+func (v *VPNServiceManager) logPrintf(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	log.Println(msg)
+	if v.onLog != nil {
+		v.onLog(msg)
 	}
 }
 
