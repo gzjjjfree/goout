@@ -78,19 +78,33 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.originalGateway = getDefaultGatewayWindows(v.gateway)
 	log.Printf("[Windows-VPN] Recorded physical gateway: %s", v.originalGateway)
 
-	// 提取 SOCKS 服务器 host 并添加 /32 直连物理网关路由（防止路由回环）
+	// 提取 SOCKS 服务器 host 及加载 data/result.json 与配置文件中的所有代理 IP，并添加 /32 直连物理网关路由（防止路由回环）
 	if idx := strings.LastIndex(socksAddr, ":"); idx != -1 {
 		v.socksHost = socksAddr[:idx]
 	} else {
 		v.socksHost = socksAddr
 	}
 
-	if v.originalGateway != "" && net.ParseIP(v.socksHost) != nil {
-		errRoute := exec.Command("route", "add", v.socksHost, "mask", "255.255.255.255", v.originalGateway, "metric", "1").Run()
+	v.proxyHosts = v.loadProxyHosts()
+
+	if v.originalGateway != "" {
+		for _, host := range v.proxyHosts {
+			errRoute := exec.Command("route", "add", host, "mask", "255.255.255.255", v.originalGateway, "metric", "1").Run()
+			if errRoute != nil {
+				log.Printf("[Windows-VPN] Failed to add direct /32 route for proxy host %s: %v", host, errRoute)
+			} else {
+				log.Printf("[Windows-VPN] Added direct /32 route for proxy host %s via physical gateway %s", host, v.originalGateway)
+			}
+		}
+	}
+
+	// 添加 /32 直连物理网关路由，使 DNS 请求直接发往公网 dnsServer 而不走 TUN 隧道
+	if v.originalGateway != "" && net.ParseIP(v.dnsServer) != nil {
+		errRoute := exec.Command("route", "add", v.dnsServer, "mask", "255.255.255.255", v.originalGateway, "metric", "1").Run()
 		if errRoute != nil {
-			log.Printf("[Windows-VPN] Failed to add direct /32 route for SOCKS server %s: %v", v.socksHost, errRoute)
+			log.Printf("[Windows-VPN] Failed to add direct /32 route for DNS server %s: %v", v.dnsServer, errRoute)
 		} else {
-			log.Printf("[Windows-VPN] Added direct /32 route for SOCKS server %s via physical gateway %s", v.socksHost, v.originalGateway)
+			log.Printf("[Windows-VPN] Added direct /32 route for DNS server %s via physical gateway %s", v.dnsServer, v.originalGateway)
 		}
 	}
 
@@ -164,12 +178,21 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	return nil
 }
 
-// cleanupRouting 清理添加的两条 /1 路由及 SOCKS 直连 /32 路由
+// cleanupRouting 清理添加的两条 /1 路由及所有代理 IP / DNS 直连 /32 路由
 func (v *VPNServiceManager) cleanupRouting() {
 	_ = exec.Command("route", "delete", "0.0.0.0", "mask", "128.0.0.0").Run()
 	_ = exec.Command("route", "delete", "128.0.0.0", "mask", "128.0.0.0").Run()
+	for _, host := range v.proxyHosts {
+		_ = exec.Command("route", "delete", host, "mask", "255.255.255.255").Run()
+		_ = exec.Command("route", "delete", host).Run()
+	}
 	if v.socksHost != "" {
+		_ = exec.Command("route", "delete", v.socksHost, "mask", "255.255.255.255").Run()
 		_ = exec.Command("route", "delete", v.socksHost).Run()
+	}
+	if v.dnsServer != "" {
+		_ = exec.Command("route", "delete", v.dnsServer, "mask", "255.255.255.255").Run()
+		_ = exec.Command("route", "delete", v.dnsServer).Run()
 	}
 	// 确保 127.0.0.1 回环路由存在，防止断开 VPN 后 127.0.0.1 路由丢失导致无法上网
 	_ = exec.Command("route", "add", "127.0.0.1", "mask", "255.255.255.255", "127.0.0.1").Run()
@@ -189,10 +212,8 @@ func (v *VPNServiceManager) StopVPN() error {
 	jni.CancelProxyContext()
 	jni.StopTun2Socks()
 
-	go func() {
-		v.cleanupRouting()
-		log.Println("[Windows-VPN] Split routes cleaned up, system restored to physical gateway.")
-	}()
+	v.cleanupRouting()
+	log.Println("[Windows-VPN] Split routes cleaned up, system restored to physical gateway.")
 
 	v.active = false
 	log.Println("[Windows-VPN] VPN stopped completely in milliseconds.")

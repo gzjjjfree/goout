@@ -151,7 +151,7 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		V2RayConfigPath: configPath,
-		SocksPort:       10818,
+		SocksPort:       10808,
 		TunIP:           "10.0.0.2",
 		ServerAddress:   "127.0.0.1",
 		ServerPort:      10809,
