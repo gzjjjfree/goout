@@ -45,6 +45,19 @@ func getInterfaceIndexByName(alias string) string {
 	return ""
 }
 
+// getLoopbackMetric 动态获取系统中 127.0.0.0/8 路由的跃点数，与系统保持一致，获取失败时回退默认 331
+func getLoopbackMetric() string {
+	psCmd := "(Get-NetRoute -DestinationPrefix '127.0.0.0/8' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty RouteMetric -First 1)"
+	out, err := runHiddenCommand("powershell", "-Command", psCmd)
+	if err == nil {
+		metric := strings.TrimSpace(string(out))
+		if metric != "" {
+			return metric
+		}
+	}
+	return "331"
+}
+
 // getDefaultGatewayWindows 获取物理网卡的默认网关，用于为代理服务器添加防回环直连路由
 func getDefaultGatewayWindows(excludeGateway string) string {
 	psCmd := fmt.Sprintf("Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Where-Object { $_.NextHop -ne '%s' -and $_.NextHop -ne '0.0.0.0' } | Sort-Object RouteMetric | Select-Object -ExpandProperty NextHop -First 1", excludeGateway)
@@ -215,11 +228,12 @@ func (v *VPNServiceManager) cleanupRouting() {
 		_ = runHiddenCommandRun("route", "delete", v.dnsServer, "mask", "255.255.255.255")
 		_ = runHiddenCommandRun("route", "delete", v.dnsServer)
 	}
-	// 确保 127.0.0.1 回环路由存在，恢复原系统路由的接口（if 1）与跃点数（metric 331）
-	if errAdd := runHiddenCommandRun("route", "add", "127.0.0.1", "mask", "255.255.255.255", "0.0.0.0", "metric", "331", "if", "1"); errAdd != nil {
+	// 确保 127.0.0.1 回环路由存在，动态获取系统中 127.0.0.0/8 的跃点数与接口 1
+	metric := getLoopbackMetric()
+	if errAdd := runHiddenCommandRun("route", "add", "127.0.0.1", "mask", "255.255.255.255", "0.0.0.0", "metric", metric, "if", "1"); errAdd != nil {
 		log.Printf("[Windows-VPN] Failed to restore 127.0.0.1 loopback route: %v", errAdd)
 	} else {
-		log.Println("[Windows-VPN] Restored 127.0.0.1 loopback route successfully (metric 331, if 1).")
+		log.Printf("[Windows-VPN] Restored 127.0.0.1 loopback route successfully (metric %s, if 1).", metric)
 	}
 }
 
