@@ -53,8 +53,10 @@ func (v *VPNServiceManager) loadProxyHosts() []string {
 		var list []map[string]interface{}
 		if err := json.Unmarshal(resultBytes, &list); err == nil {
 			for _, item := range list {
-				if addr, ok := item["address"].(string); ok && net.ParseIP(addr) != nil {
-					hosts[addr] = true
+				if addr, ok := item["address"].(string); ok {
+					if ip := net.ParseIP(addr); ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() {
+						hosts[addr] = true
+					}
 				}
 			}
 		}
@@ -71,8 +73,10 @@ func (v *VPNServiceManager) loadProxyHosts() []string {
 							if vnext, ok := settings["vnext"].([]interface{}); ok {
 								for _, vn := range vnext {
 									if vnMap, ok := vn.(map[string]interface{}); ok {
-										if addr, ok := vnMap["address"].(string); ok && net.ParseIP(addr) != nil {
-											hosts[addr] = true
+										if addr, ok := vnMap["address"].(string); ok {
+											if ip := net.ParseIP(addr); ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() {
+												hosts[addr] = true
+											}
 										}
 									}
 								}
@@ -84,8 +88,10 @@ func (v *VPNServiceManager) loadProxyHosts() []string {
 		}
 	}
 
-	if v.socksHost != "" && net.ParseIP(v.socksHost) != nil {
-		hosts[v.socksHost] = true
+	if v.socksHost != "" {
+		if ip := net.ParseIP(v.socksHost); ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() {
+			hosts[v.socksHost] = true
+		}
 	}
 
 	var result []string
