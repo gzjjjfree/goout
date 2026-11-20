@@ -3,8 +3,10 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -25,7 +27,7 @@ func runHiddenCommandRun(name string, args ...string) error {
 	return cmd.Run()
 }
 
-// StartVPN enables Windows System Proxy pointing to the local SOCKS/proxy address.
+// StartVPN enables Windows System Proxy pointing to the local SOCKS/HTTP proxy address.
 func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -36,11 +38,31 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 
 	log.Printf("[Windows-SystemProxy] Enabling Windows System Proxy: %s", socksAddr)
 
+	proxyServerValue := fmt.Sprintf("socks=%s", socksAddr)
+	configPaths := []string{"goout.json", "data/goout.json", "config_save.json"}
+	for _, path := range configPaths {
+		if content, err := os.ReadFile(path); err == nil {
+			var raw map[string]interface{}
+			if err := json.Unmarshal(content, &raw); err == nil {
+				if inbounds, ok := raw["inbounds"].([]interface{}); ok {
+					for _, ib := range inbounds {
+						if ibMap, ok := ib.(map[string]interface{}); ok {
+							if proto, ok := ibMap["protocol"].(string); ok && proto == "http" {
+								proxyServerValue = socksAddr
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	psCmd := fmt.Sprintf(
 		"Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name ProxyEnable -Value 1; "+
-			"Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name ProxyServer -Value 'socks=%s'; "+
+			"Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name ProxyServer -Value '%s'; "+
 			"Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name ProxyOverride -Value 'localhost;127.*;10.*;172.16.*;192.168.*;<local>'",
-		socksAddr,
+		proxyServerValue,
 	)
 
 	err := runHiddenCommandRun("powershell", "-Command", psCmd)

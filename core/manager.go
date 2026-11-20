@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -198,7 +199,8 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	}
 
 	// 在内存中直接通过 StartInstance 加载并启动配置（格式为 json）
-	instance, startErr := v2core.StartInstance("json", configJSON)
+	effectiveConfig := ensureV2rayLogEnabled(configJSON)
+	instance, startErr := v2core.StartInstance("json", effectiveConfig)
 	if startErr != nil {
 		cancel()
 		return fmt.Errorf("failed to start v2ray in-memory instance: %w", startErr)
@@ -268,7 +270,8 @@ func (m *V2rayManager) CheckConfig(configJSON []byte) error {
 }
 
 func (m *V2rayManager) checkConfigInMemory(configJSON []byte) error {
-	instance, err := v2core.StartInstance("json", configJSON)
+	effectiveConfig := ensureV2rayLogEnabled(configJSON)
+	instance, err := v2core.StartInstance("json", effectiveConfig)
 	if err != nil {
 		return fmt.Errorf("v2ray config check failed: %w", err)
 	}
@@ -276,4 +279,24 @@ func (m *V2rayManager) checkConfigInMemory(configJSON []byte) error {
 		_ = instance.Close()
 	}
 	return nil
+}
+
+func ensureV2rayLogEnabled(configJSON []byte) []byte {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(configJSON, &raw); err != nil {
+		return configJSON
+	}
+	logObj, ok := raw["log"].(map[string]interface{})
+	if !ok {
+		logObj = make(map[string]interface{})
+		raw["log"] = logObj
+	}
+	level, _ := logObj["loglevel"].(string)
+	if level == "" || level == "none" {
+		logObj["loglevel"] = "warning"
+	}
+	if modified, err := json.Marshal(raw); err == nil {
+		return modified
+	}
+	return configJSON
 }

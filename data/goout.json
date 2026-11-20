@@ -1,6 +1,6 @@
 {
     "log": {
-        "loglevel": "none"
+        "loglevel": "warning"
     },
     "dns": {
         "servers": [
@@ -90,7 +90,7 @@
             {
                 "tag": "cdn-balancer-proxy",
                 "selector": [
-                    "cdn-proxy"
+                    "cdn-"
                 ]
             }
         ],
