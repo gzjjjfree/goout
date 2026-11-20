@@ -133,7 +133,25 @@ func SetupDashboard(w fyne.Window) {
 				fyne.Do(func() {
 					statusLabel.SetText("状态: VPN 启动中...")
 				})
-				cfg.SocksPort = 10808
+				// 从实际内置 V2Ray 配置文件中读取监听端口，取消硬编码 10808
+				if configBytes, err := os.ReadFile(cfg.V2RayConfigPath); err == nil {
+					var rawCfg map[string]interface{}
+					if err := json.Unmarshal(configBytes, &rawCfg); err == nil {
+						if inbounds, ok := rawCfg["inbounds"].([]interface{}); ok && len(inbounds) > 0 {
+							for _, ib := range inbounds {
+								if ibMap, ok := ib.(map[string]interface{}); ok {
+									if p, ok := ibMap["port"].(float64); ok && p > 0 {
+										cfg.SocksPort = int(p)
+										break
+									} else if p, ok := ibMap["port"].(int); ok && p > 0 {
+										cfg.SocksPort = p
+										break
+									}
+								}
+							}
+						}
+					}
+				}
 				_ = data.SaveConfig("config_save.json", cfg)
 
 				socksAddr := fmt.Sprintf("127.0.0.1:%d", cfg.SocksPort)
