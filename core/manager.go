@@ -10,6 +10,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gzjjjfree/goout/data"
 	v2core "github.com/gzjjjfree/v5-result"
@@ -18,8 +19,10 @@ import (
 )
 
 var (
-	earlyLogs []string
-	earlyMu   sync.Mutex
+	earlyLogs     []string
+	earlyMu       sync.Mutex
+	globalLogFile *os.File
+	logFileMu     sync.Mutex
 )
 
 func init() {
@@ -58,6 +61,9 @@ func setupLogCapture() {
 	logFile, err := os.OpenFile("goout.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	var writer io.Writer
 	if err == nil {
+		logFileMu.Lock()
+		globalLogFile = logFile
+		logFileMu.Unlock()
 		writer = &logWriter{file: logFile}
 	} else {
 		writer = &logWriter{file: nil}
@@ -65,18 +71,32 @@ func setupLogCapture() {
 	log.SetOutput(writer)
 }
 
+func CloseLog() {
+	logFileMu.Lock()
+	defer logFileMu.Unlock()
+	if globalLogFile != nil {
+		globalLogFile.Close()
+		globalLogFile = nil
+	}
+}
+
 // V2rayManager 管理 V2Ray 核心在内存中的生命周期（适配 Android 10+ W^X 安全策略）
 type V2rayManager struct {
-	mu         sync.Mutex
-	instance   *v2core.Instance
-	isRunning  bool
-	logHandler *uiLogHandler
-	ctx        context.Context
-	cancel     context.CancelFunc
-	maxLogs    int
-	logs       []string
-	logMu      sync.Mutex
-	onLog      func(string)
+	mu            sync.Mutex
+	instance      *v2core.Instance
+	isRunning     bool
+	isStopping    bool
+	stopChan      chan struct{}
+	logHandler    *uiLogHandler
+	ctx           context.Context
+	cancel        context.CancelFunc
+	maxLogs       int
+	logs          []string
+	logMu         sync.Mutex
+	onLog         func(string)
+	logBuffer     []string
+	bufferMu      sync.Mutex
+	flushStopChan chan struct{}
 }
 
 type uiLogHandler struct {
@@ -98,10 +118,12 @@ var (
 func GetManager(onLog func(string)) *V2rayManager {
 	managerOnce.Do(func() {
 		globalManager = &V2rayManager{
-			maxLogs: 500,
-			onLog:   onLog,
+			maxLogs:       500,
+			onLog:         onLog,
+			flushStopChan: make(chan struct{}),
 		}
 		globalManager.initLogHandler()
+		globalManager.startLogFlusher()
 	})
 	if onLog != nil {
 		globalManager.mu.Lock()
@@ -121,6 +143,45 @@ func GetManager(onLog func(string)) *V2rayManager {
 	return globalManager
 }
 
+func (m *V2rayManager) startLogFlusher() {
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				m.flushLogs()
+			case <-m.flushStopChan:
+				m.flushLogs()
+				return
+			}
+		}
+	}()
+}
+
+func (m *V2rayManager) flushLogs() {
+	m.bufferMu.Lock()
+	if len(m.logBuffer) == 0 {
+		m.bufferMu.Unlock()
+		return
+	}
+	batch := m.logBuffer
+	m.logBuffer = nil
+	m.bufferMu.Unlock()
+
+	combined := strings.Join(batch, "\n")
+	m.emitLog(combined)
+}
+
+func (m *V2rayManager) emitLog(msg string) {
+	m.mu.Lock()
+	fn := m.onLog
+	m.mu.Unlock()
+	if fn != nil {
+		fn(msg)
+	}
+}
+
 func (m *V2rayManager) addLog(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	m.logMu.Lock()
@@ -130,24 +191,20 @@ func (m *V2rayManager) addLog(format string, args ...any) {
 	}
 	m.logMu.Unlock()
 
-	if m.onLog != nil {
-		m.onLog(msg)
+	m.bufferMu.Lock()
+	m.logBuffer = append(m.logBuffer, msg)
+	shouldFlush := len(m.logBuffer) >= 50
+	m.bufferMu.Unlock()
+
+	if shouldFlush {
+		m.flushLogs()
 	}
 }
 
 func (m *V2rayManager) initLogHandler() {
 	m.logHandler = &uiLogHandler{
 		onLog: func(msg string) {
-			m.logMu.Lock()
-			m.logs = append(m.logs, msg)
-			if len(m.logs) > m.maxLogs {
-				m.logs = m.logs[1:]
-			}
-			m.logMu.Unlock()
-
-			if m.onLog != nil {
-				m.onLog(msg)
-			}
+			m.addLog("%s", msg)
 		},
 	}
 	v2log.RegisterHandler(m.logHandler)
@@ -165,9 +222,23 @@ func (m *V2rayManager) GetLogs() []string {
 // Start 在内存中启动 V2Ray 实例（带 Panic Recovery 与并发保护）
 func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if m.isRunning && m.instance != nil {
+		m.mu.Unlock()
+		return fmt.Errorf("v2ray core instance is already running")
+	}
+	if m.isStopping {
+		stopChan := m.stopChan
+		m.mu.Unlock()
+		if stopChan != nil {
+			<-stopChan // 等待上一次实例完全关闭并释放端口资源
+		}
+	} else {
+		m.mu.Unlock()
+	}
+
+	m.mu.Lock()
+	if m.isRunning && m.instance != nil {
+		m.mu.Unlock()
 		return fmt.Errorf("v2ray core instance is already running")
 	}
 
@@ -175,58 +246,72 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	data.EnsureGeositeDat()
 	data.EnsureResultJSON()
 
-	// Panic Recovery 保护：防止底层核心崩溃导致整个 Fyne UI 进程闪退
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("v2ray core panicked: %v\n%s", r, debug.Stack())
-			m.isRunning = false
-			m.instance = nil
-			if m.cancel != nil {
-				m.cancel()
-			}
-			if m.onLog != nil {
-				m.onLog(err.Error())
-			}
-		}
-	}()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	m.ctx = ctx
 	m.cancel = cancel
+	m.mu.Unlock()
 
-	if m.onLog != nil {
-		m.onLog("Starting V2Ray core in-memory instance...")
-	}
+	m.emitLog("Starting V2Ray core in-memory instance...")
 
-	// 在内存中直接通过 StartInstance 加载并启动配置（格式为 json）
-	effectiveConfig := ensureV2rayLogEnabled(configJSON)
-	instance, startErr := v2core.StartInstance("json", effectiveConfig)
+	// Panic Recovery 保护：防止底层核心崩溃导致整个 Fyne UI 进程闪退
+	var instance *v2core.Instance
+	var startErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("v2ray core panicked: %v\n%s", r, debug.Stack())
+				m.mu.Lock()
+				m.isRunning = false
+				m.instance = nil
+				if m.cancel != nil {
+					m.cancel()
+				}
+				m.mu.Unlock()
+				m.emitLog(err.Error())
+			}
+		}()
+
+		effectiveConfig := ensureV2rayLogEnabled(configJSON)
+		instance, startErr = v2core.StartInstance("json", effectiveConfig)
+	}()
+
 	if startErr != nil {
-		cancel()
+		m.mu.Lock()
+		if m.cancel != nil {
+			m.cancel()
+		}
+		m.isRunning = false
+		m.instance = nil
+		m.mu.Unlock()
 		return fmt.Errorf("failed to start v2ray in-memory instance: %w", startErr)
 	}
 
+	m.mu.Lock()
 	m.instance = instance
 	m.isRunning = true
+	m.mu.Unlock()
 
-	if m.onLog != nil {
-		m.onLog("V2Ray core in-memory instance started successfully.")
-	}
+	m.emitLog("V2Ray core in-memory instance started successfully.")
 
 	return nil
 }
 
-// Stop 优雅关闭 V2Ray 内存实例并同步释放资源（确保端口释放）
+// Stop 优雅关闭 V2Ray 内存实例并同步释放资源（确保端口释放，防止竞态）
 func (m *V2rayManager) Stop() error {
 	m.mu.Lock()
-	if !m.isRunning {
+	if !m.isRunning && !m.isStopping {
+		m.mu.Unlock()
+		return nil
+	}
+	if m.isStopping {
 		m.mu.Unlock()
 		return nil
 	}
 
-	if m.onLog != nil {
-		m.onLog("Stopping V2Ray core in-memory instance...")
-	}
+	m.isRunning = false
+	m.isStopping = true
+	stopChan := make(chan struct{})
+	m.stopChan = stopChan
 
 	if m.cancel != nil {
 		m.cancel()
@@ -234,21 +319,34 @@ func (m *V2rayManager) Stop() error {
 
 	inst := m.instance
 	m.instance = nil
-	m.isRunning = false
 	m.mu.Unlock() // 释放锁，允许其他操作进入
 
-	if inst != nil {
-		// 异步关闭实例，避免等待网络回应或连接断开导致阻塞
-		go func() {
-			err := inst.Close()
-			if err != nil && m.onLog != nil {
-				m.onLog(fmt.Sprintf("V2Ray instance close warning: %v", err))
-			}
-		}()
-	}
+	m.emitLog("Stopping V2Ray core in-memory instance...")
 
-	if m.onLog != nil {
-		m.onLog("V2Ray core in-memory instance stopped.")
+	if inst != nil {
+		// 异步关闭实例，避免等待网络回应或连接断开导致阻塞，同时通过 stopChan 保证完全关闭前不可再次 Start 冲突
+		go func() {
+			defer close(stopChan)
+			defer func() {
+				if r := recover(); r != nil {
+					m.emitLog(fmt.Sprintf("V2Ray instance close panic recovered: %v", r))
+				}
+			}()
+			err := inst.Close()
+			if err != nil {
+				m.emitLog(fmt.Sprintf("V2Ray instance close warning: %v", err))
+			}
+			m.mu.Lock()
+			m.isStopping = false
+			m.mu.Unlock()
+			m.emitLog("V2Ray core in-memory instance stopped.")
+		}()
+	} else {
+		close(stopChan)
+		m.mu.Lock()
+		m.isStopping = false
+		m.mu.Unlock()
+		m.emitLog("V2Ray core in-memory instance stopped.")
 	}
 
 	return nil

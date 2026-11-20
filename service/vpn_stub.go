@@ -3,6 +3,7 @@
 package service
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/gzjjjfree/goout/jni"
@@ -18,7 +19,10 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	}
 
 	log.Printf("[Stub-VPN] Starting cross-platform TUN simulation: IP=%s, Gateway=%s, SOCKS=%s", v.tunIP, v.gateway, socksAddr)
-	jni.StartTun2Socks(-1, v.tunIP, v.gateway, socksAddr)
+	if err := jni.StartTun2Socks(-1, v.tunIP, v.gateway, socksAddr); err != nil {
+		log.Printf("[Stub-VPN] Failed to start tun2socks: %v", err)
+		return fmt.Errorf("start tun2socks: %w", err)
+	}
 
 	v.active = true
 	return nil

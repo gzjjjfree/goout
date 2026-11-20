@@ -3,10 +3,8 @@
 package service
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -48,51 +46,51 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 
 	log.Printf("[macOS-SystemProxy] Enabling macOS System Proxy: %s", socksAddr)
 
-	isHttp := false
-	host := "127.0.0.1"
-	port := "10808"
-	if parts := strings.Split(socksAddr, ":"); len(parts) == 2 {
-		host = parts[0]
-		port = parts[1]
-	}
-
-	configPaths := []string{"goout.json", "data/goout.json", "config_save.json"}
-	for _, path := range configPaths {
-		if content, err := os.ReadFile(path); err == nil {
-			var raw map[string]interface{}
-			if err := json.Unmarshal(content, &raw); err == nil {
-				if inbounds, ok := raw["inbounds"].([]interface{}); ok {
-					for _, ib := range inbounds {
-						if ibMap, ok := ib.(map[string]interface{}); ok {
-							if proto, ok := ibMap["protocol"].(string); ok && proto == "http" {
-								isHttp = true
-								if p, ok := ibMap["port"].(float64); ok && p > 0 {
-									port = fmt.Sprintf("%d", int(p))
-								} else if p, ok := ibMap["port"].(int); ok && p > 0 {
-									port = fmt.Sprintf("%d", p)
-								}
-								break
-							}
-						}
-					}
-				}
-			}
-		}
-	}
+	isHttp, host, port := CheckHttpInbound(socksAddr)
 
 	services := getActiveNetworkServices()
+	successCount := 0
+	var lastErr error
+
 	for _, svc := range services {
+		var err error
 		if isHttp {
-			_ = exec.Command("networksetup", "-setwebproxy", svc, host, port).Run()
-			_ = exec.Command("networksetup", "-setwebproxystate", svc, "on").Run()
-			_ = exec.Command("networksetup", "-setsecurewebproxy", svc, host, port).Run()
-			_ = exec.Command("networksetup", "-setsecurewebproxystate", svc, "on").Run()
+			if err = exec.Command("networksetup", "-setwebproxy", svc, host, port).Run(); err != nil {
+				lastErr = err
+				log.Printf("[macOS-SystemProxy] Failed to set web proxy on %s: %v", svc, err)
+			}
+			if err = exec.Command("networksetup", "-setwebproxystate", svc, "on").Run(); err != nil {
+				lastErr = err
+				log.Printf("[macOS-SystemProxy] Failed to set web proxy state on for %s: %v", svc, err)
+			}
+			if err = exec.Command("networksetup", "-setsecurewebproxy", svc, host, port).Run(); err != nil {
+				lastErr = err
+				log.Printf("[macOS-SystemProxy] Failed to set secure web proxy on %s: %v", svc, err)
+			}
+			if err = exec.Command("networksetup", "-setsecurewebproxystate", svc, "on").Run(); err != nil {
+				lastErr = err
+				log.Printf("[macOS-SystemProxy] Failed to set secure web proxy state on for %s: %v", svc, err)
+			}
 			log.Printf("[macOS-SystemProxy] Configured Web/SecureWeb proxy on %s -> %s:%s", svc, host, port)
 		} else {
-			_ = exec.Command("networksetup", "-setsocksfirewallproxy", svc, host, port).Run()
-			_ = exec.Command("networksetup", "-setsocksfirewallproxystate", svc, "on").Run()
+			if err = exec.Command("networksetup", "-setsocksfirewallproxy", svc, host, port).Run(); err != nil {
+				lastErr = err
+				log.Printf("[macOS-SystemProxy] Failed to set socks firewall proxy on %s: %v", svc, err)
+			}
+			if err = exec.Command("networksetup", "-setsocksfirewallproxystate", svc, "on").Run(); err != nil {
+				lastErr = err
+				log.Printf("[macOS-SystemProxy] Failed to set socks firewall proxy state on for %s: %v", svc, err)
+			}
 			log.Printf("[macOS-SystemProxy] Configured SOCKS firewall proxy on %s -> %s:%s", svc, host, port)
 		}
+		if err == nil {
+			successCount++
+		}
+	}
+
+	if len(services) > 0 && successCount == 0 && lastErr != nil {
+		log.Printf("[macOS-SystemProxy] Failed to configure system proxy on any network service: %v", lastErr)
+		return fmt.Errorf("failed to configure macOS system proxy: %w", lastErr)
 	}
 
 	v.socksHost = socksAddr

@@ -17,25 +17,6 @@ var embeddedGeosite []byte
 //go:embed result.json
 var embeddedResultJSON []byte
 
-//go:embed wintun.dll
-var embeddedWintunDLL []byte
-
-// EnsureWintunDLL 确保 wintun.dll 在可执行文件同级目录及工作目录下可用（若已存在则跳过）
-func EnsureWintunDLL() {
-	if len(embeddedWintunDLL) == 0 {
-		return
-	}
-	if exe, err := os.Executable(); err == nil && exe != "" {
-		p := filepath.Join(filepath.Dir(exe), "wintun.dll")
-		if _, err := os.Stat(p); os.IsNotExist(err) {
-			_ = os.WriteFile(p, embeddedWintunDLL, 0644)
-		}
-	}
-	if _, err := os.Stat("wintun.dll"); os.IsNotExist(err) {
-		_ = os.WriteFile("wintun.dll", embeddedWintunDLL, 0644)
-	}
-}
-
 // getTargetDir 获取与运行文件或工作目录相同的目标目录（与 geosite.dat 同一目录）
 func getTargetDir() string {
 	targetDir := ""

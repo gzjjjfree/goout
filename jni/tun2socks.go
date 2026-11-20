@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -47,6 +48,13 @@ func StartTun2Socks(fd int, tunAddr, gateway, socksServer string) error {
 		deviceStr = "tun://GoOutTUN"
 	} else {
 		deviceStr = "tun://tun0"
+		if runtime.GOOS == "linux" {
+			if f, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0); err != nil {
+				return fmt.Errorf("failed to open /dev/net/tun (requires root privileges or tun kernel module): %w", err)
+			} else {
+				_ = f.Close()
+			}
+		}
 	}
 
 	proxyURL := socksServer
@@ -73,7 +81,3 @@ func StopTun2Socks() {
 	log.Println("[Tun2Socks] tun2socks engine stopped.")
 }
 
-// RunTunEngine kept for backward compatibility if any legacy code calls it directly
-func RunTunEngine(file interface{}, tunAddr, gateway, socksServer string) {
-	log.Println("[Tun2Socks] RunTunEngine invoked (legacy wrapper)")
-}

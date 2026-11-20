@@ -1,10 +1,13 @@
 package ui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -15,13 +18,10 @@ import (
 	"github.com/gzjjjfree/goout/core"
 	"github.com/gzjjjfree/goout/data"
 	"github.com/gzjjjfree/goout/service"
+	"github.com/gzjjjfree/goout/util"
 )
 
 var Version = "1.0.0"
-
-func InspectNativeLibs() {
-
-}
 
 func SetupDashboard(w fyne.Window) {
 	cfg, err := data.LoadConfig("config_save.json")
@@ -32,7 +32,9 @@ func SetupDashboard(w fyne.Window) {
 		}
 	}
 
-	logText := "GoOut 初始化成功 (内存 V2Ray 核心)。\n准备启动代理..."
+	maxLogLines := 500
+	logLines := []string{"GoOut 初始化成功 (内存 V2Ray 核心)。", "准备启动代理..."}
+	logText := strings.Join(logLines, "\n")
 	logLabel := widget.NewLabel(logText)
 	logLabel.Wrapping = fyne.TextWrapWord
 
@@ -41,7 +43,12 @@ func SetupDashboard(w fyne.Window) {
 	// Callback for real-time log updates with fyne.Do (UI Thread Safety)
 	onLog := func(msg string) {
 		fyne.Do(func() {
-			logText += "\n" + msg
+			lines := strings.Split(msg, "\n")
+			logLines = append(logLines, lines...)
+			if len(logLines) > maxLogLines {
+				logLines = logLines[len(logLines)-maxLogLines:]
+			}
+			logText = strings.Join(logLines, "\n")
 			logLabel.SetText(logText)
 			scroll.ScrollToBottom()
 		})
@@ -91,7 +98,8 @@ func SetupDashboard(w fyne.Window) {
 
 				configBytes, err := os.ReadFile(cfg.V2RayConfigPath)
 				if err != nil {
-					_ = data.SaveConfig(cfg.V2RayConfigPath, cfg)
+					_ = os.MkdirAll(filepath.Dir(cfg.V2RayConfigPath), 0755)
+					_ = os.WriteFile(cfg.V2RayConfigPath, data.GetDefaultConfigBytes(), 0644)
 					configBytes, err = os.ReadFile(cfg.V2RayConfigPath)
 					if err != nil {
 						fyne.Do(func() {
@@ -140,10 +148,7 @@ func SetupDashboard(w fyne.Window) {
 						if inbounds, ok := rawCfg["inbounds"].([]interface{}); ok && len(inbounds) > 0 {
 							for _, ib := range inbounds {
 								if ibMap, ok := ib.(map[string]interface{}); ok {
-									if p, ok := ibMap["port"].(float64); ok && p > 0 {
-										cfg.SocksPort = int(p)
-										break
-									} else if p, ok := ibMap["port"].(int); ok && p > 0 {
+									if p := util.ParsePortToInt(ibMap["port"]); p > 0 {
 										cfg.SocksPort = p
 										break
 									}
@@ -175,11 +180,14 @@ func SetupDashboard(w fyne.Window) {
 		}()
 	})
 
+	updateStatus()
+
 	configBtn := widget.NewButton("设置", func() {
-		showSettingsDialog(w, cfg)
+		showSettingsDialog(w, cfg, vpnMgr)
 	})
 
 	clearBtn := widget.NewButton("清除日志", func() {
+		logLines = nil
 		logText = ""
 		logLabel.SetText("")
 	})
@@ -208,7 +216,7 @@ func SetupDashboard(w fyne.Window) {
 	w.Resize(fyne.NewSize(450, 650))
 }
 
-func showSettingsDialog(w fyne.Window, cfg *data.Config) {
+func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServiceManager) {
 	// 读取 V2Ray 配置文件内容到 map[string]interface{}
 	configPath := cfg.V2RayConfigPath
 	if configPath == "" {
@@ -265,10 +273,8 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 				tagEntry.SetText(t)
 			}
 			portEntryItem := widget.NewEntry()
-			if p, ok := inboundMap["port"].(float64); ok {
-				portEntryItem.SetText(strconv.Itoa(int(p)))
-			} else if p, ok := inboundMap["port"].(int); ok {
-				portEntryItem.SetText(strconv.Itoa(p))
+			if pVal, exists := inboundMap["port"]; exists && pVal != nil {
+				portEntryItem.SetText(fmt.Sprintf("%v", pVal))
 			}
 			listenEntry := widget.NewEntry()
 			if l, ok := inboundMap["listen"].(string); ok {
@@ -304,9 +310,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 			// 实时同步修改回 inboundMap
 			tagEntry.OnChanged = func(s string) { inboundMap["tag"] = s }
 			portEntryItem.OnChanged = func(s string) {
-				if pi, err := strconv.Atoi(s); err == nil {
-					inboundMap["port"] = pi
-				}
+				inboundMap["port"] = s
 			}
 			listenEntry.OnChanged = func(s string) { inboundMap["listen"] = s }
 			protoEntry.OnChanged = func(s string) { inboundMap["protocol"] = s }
@@ -565,6 +569,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 
 			outboundsContainer.Add(box)
 		}
+		outboundsContainer.Refresh()
 	}
 	updateOutboundsUI()
 
@@ -765,6 +770,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 				widget.NewSeparator(),
 			))
 		}
+		rulesContainer.Refresh()
 	}
 	updateRulesUI()
 
@@ -797,18 +803,18 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 		container.NewTabItem("路由设置", container.NewVScroll(routingTab)),
 	)
 
+	var lastCheckedConfigHash string
+
 	saveBtn := widget.NewButton("保存所有配置", func() {
 		// 保存主设置到 cfg
 		cfg.TunIP = tunIPEntry.Text
+		vpnMgr.SetTunIP(cfg.TunIP)
 
 		// 从 rawCfg 中提取入站端口更新到 cfg.SocksPort
 		if inbounds, ok := rawCfg["inbounds"].([]interface{}); ok && len(inbounds) > 0 {
 			for _, ib := range inbounds {
 				if ibMap, ok := ib.(map[string]interface{}); ok {
-					if p, ok := ibMap["port"].(float64); ok && p > 0 {
-						cfg.SocksPort = int(p)
-						break
-					} else if p, ok := ibMap["port"].(int); ok && p > 0 {
+					if p := util.ParsePortToInt(ibMap["port"]); p > 0 {
 						cfg.SocksPort = p
 						break
 					}
@@ -831,30 +837,63 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config) {
 			return
 		}
 
-		// 使用 v2ray 检查 config 文件
-		mgr := core.GetManager(nil)
-		if checkErr := mgr.CheckConfig(outBytes); checkErr != nil {
-			dialog.ShowError(fmt.Errorf("V2Ray 核心配置检查失败: %w", checkErr), w)
+		hashBytes := sha256.Sum256(outBytes)
+		currentHash := hex.EncodeToString(hashBytes[:])
+
+		if currentHash == lastCheckedConfigHash {
+			fyne.Do(func() {
+				configTextEntry := widget.NewMultiLineEntry()
+				configTextEntry.SetText(string(outBytes))
+				configTextEntry.Wrapping = fyne.TextWrapWord
+
+				scroll := container.NewVScroll(configTextEntry)
+				scroll.SetMinSize(fyne.NewSize(500, 350))
+
+				infoBox := container.NewVBox(
+					widget.NewLabelWithStyle("配置保存成功 (配置未修改，跳过重复核心检查)！", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+					widget.NewLabel("Config 全文如下："),
+					scroll,
+				)
+
+				dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
+				dInfo.Resize(fyne.NewSize(600, 500))
+				dInfo.Show()
+			})
 			return
 		}
 
-		// 显示 config 全文
-		configTextEntry := widget.NewMultiLineEntry()
-		configTextEntry.SetText(string(outBytes))
-		configTextEntry.Wrapping = fyne.TextWrapWord
+		// 使用 v2ray 检查 config 文件
+		go func() {
+			mgr := core.GetManager(nil)
+			if checkErr := mgr.CheckConfig(outBytes); checkErr != nil {
+				fyne.Do(func() {
+					dialog.ShowError(fmt.Errorf("V2Ray 核心配置检查失败: %w", checkErr), w)
+				})
+				return
+			}
 
-		scroll := container.NewVScroll(configTextEntry)
-		scroll.SetMinSize(fyne.NewSize(500, 350))
+			lastCheckedConfigHash = currentHash
 
-		infoBox := container.NewVBox(
-			widget.NewLabelWithStyle("配置保存成功，V2Ray 核心检查通过！", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-			widget.NewLabel("Config 全文如下："),
-			scroll,
-		)
+			fyne.Do(func() {
+				// 显示 config 全文
+				configTextEntry := widget.NewMultiLineEntry()
+				configTextEntry.SetText(string(outBytes))
+				configTextEntry.Wrapping = fyne.TextWrapWord
 
-		dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
-		dInfo.Resize(fyne.NewSize(600, 500))
-		dInfo.Show()
+				scroll := container.NewVScroll(configTextEntry)
+				scroll.SetMinSize(fyne.NewSize(500, 350))
+
+				infoBox := container.NewVBox(
+					widget.NewLabelWithStyle("配置保存成功，V2Ray 核心检查通过！", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+					widget.NewLabel("Config 全文如下："),
+					scroll,
+				)
+
+				dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
+				dInfo.Resize(fyne.NewSize(600, 500))
+				dInfo.Show()
+			})
+		}()
 	})
 
 	dialogContent := container.NewBorder(nil, saveBtn, nil, nil, tabs)

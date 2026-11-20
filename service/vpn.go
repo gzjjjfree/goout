@@ -3,83 +3,41 @@ package service
 import (
 	"encoding/json"
 	"fmt"
-	"log"
-	"net"
 	"os"
+	"strings"
 	"sync"
+
+	"github.com/gzjjjfree/goout/util"
 )
 
-// VPNServiceManager handles cross-platform VPN/TUN lifecycle and routing configuration.
-type VPNServiceManager struct {
-	mu              sync.Mutex
-	active          bool
-	tunIP           string
-	gateway         string
-	dnsServer       string
-	originalGateway string
-	socksHost       string
-	proxyHosts      []string
-	onLog           func(string)
-}
-
-func NewVPNServiceManager(tunIP, gateway string, onLog func(string)) *VPNServiceManager {
-	return &VPNServiceManager{
-		tunIP:     tunIP,
-		gateway:   gateway,
-		dnsServer: "8.8.8.8",
-		onLog:     onLog,
-	}
-}
-
-func (v *VPNServiceManager) logPrintf(format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, args...)
-	log.Println(msg)
-	if v.onLog != nil {
-		v.onLog(msg)
-	}
-}
-
-func (v *VPNServiceManager) IsRunning() bool {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.active
-}
-
-func (v *VPNServiceManager) loadProxyHosts() []string {
-	hosts := make(map[string]bool)
-
-	// 1. Read data/result.json
-	if resultBytes, err := os.ReadFile("data/result.json"); err == nil {
-		var list []map[string]interface{}
-		if err := json.Unmarshal(resultBytes, &list); err == nil {
-			for _, item := range list {
-				if addr, ok := item["address"].(string); ok {
-					if ip := net.ParseIP(addr); ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() {
-						hosts[addr] = true
-					}
-				}
-			}
-		}
+// CheckHttpInbound checks if an HTTP inbound is configured in any of the standard config files,
+// returning whether it's HTTP, along with the proxy host and port.
+func CheckHttpInbound(socksAddr string) (bool, string, string) {
+	host := "127.0.0.1"
+	port := "10808"
+	if parts := strings.Split(socksAddr, ":"); len(parts) == 2 {
+		host = parts[0]
+		port = parts[1]
 	}
 
-	// 2. Read goout.json
-	if gooutBytes, err := os.ReadFile("goout.json"); err == nil {
-		var cfg map[string]interface{}
-		if err := json.Unmarshal(gooutBytes, &cfg); err == nil {
-			if outbounds, ok := cfg["outbounds"].([]interface{}); ok {
-				for _, ob := range outbounds {
-					if obMap, ok := ob.(map[string]interface{}); ok {
-						if settings, ok := obMap["settings"].(map[string]interface{}); ok {
-							if vnext, ok := settings["vnext"].([]interface{}); ok {
-								for _, vn := range vnext {
-									if vnMap, ok := vn.(map[string]interface{}); ok {
-										if addr, ok := vnMap["address"].(string); ok {
-											if ip := net.ParseIP(addr); ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() {
-												hosts[addr] = true
-											}
-										}
-									}
+	isHttp := false
+	proxyHost := host
+	proxyPort := port
+
+	configPaths := []string{"goout.json", "data/goout.json", "config_save.json"}
+	for _, path := range configPaths {
+		if content, err := os.ReadFile(path); err == nil {
+			var raw map[string]interface{}
+			if err := json.Unmarshal(content, &raw); err == nil {
+				if inbounds, ok := raw["inbounds"].([]interface{}); ok {
+					for _, ib := range inbounds {
+						if ibMap, ok := ib.(map[string]interface{}); ok {
+							if proto, ok := ibMap["protocol"].(string); ok && proto == "http" {
+								isHttp = true
+								if p := util.ParsePortToInt(ibMap["port"]); p > 0 {
+									proxyPort = fmt.Sprintf("%d", p)
 								}
+								break
 							}
 						}
 					}
@@ -87,16 +45,35 @@ func (v *VPNServiceManager) loadProxyHosts() []string {
 			}
 		}
 	}
+	return isHttp, proxyHost, proxyPort
+}
 
-	if v.socksHost != "" {
-		if ip := net.ParseIP(v.socksHost); ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() {
-			hosts[v.socksHost] = true
-		}
-	}
+// VPNServiceManager handles cross-platform VPN/TUN lifecycle and routing configuration.
+type VPNServiceManager struct {
+	mu        sync.Mutex
+	active    bool
+	tunIP     string
+	gateway   string
+	socksHost string
+	onLog     func(string)
+}
 
-	var result []string
-	for h := range hosts {
-		result = append(result, h)
+func NewVPNServiceManager(tunIP, gateway string, onLog func(string)) *VPNServiceManager {
+	return &VPNServiceManager{
+		tunIP:   tunIP,
+		gateway: gateway,
+		onLog:   onLog,
 	}
-	return result
+}
+
+func (v *VPNServiceManager) SetTunIP(tunIP string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.tunIP = tunIP
+}
+
+func (v *VPNServiceManager) IsRunning() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.active
 }

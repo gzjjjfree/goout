@@ -3,14 +3,19 @@
 package service
 
 import (
+	"fmt"
 	"log"
+	"sync"
 
 	"github.com/gzjjjfree/goout/jni"
 )
 
 var (
-	androidFD   int = -1
-	protectFunc func(int) bool
+	androidMu        sync.Mutex
+	androidFD        int = -1
+	protectFunc      func(int) bool
+	activeVPN        *VPNServiceManager
+	currentSocksAddr string
 )
 
 // StartVPN initializes Android VpnService TUN interface and tun2socks packet forwarding.
@@ -22,12 +27,20 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		return nil
 	}
 
-	log.Printf("[Android-VPN] Starting VpnService TUN tunnel: IP=%s, Gateway=%s, SOCKS=%s", v.tunIP, v.gateway, socksAddr)
-
+	androidMu.Lock()
+	activeVPN = v
+	currentSocksAddr = socksAddr
 	simulatedFD := androidFD
+	androidMu.Unlock()
+
+	log.Printf("[Android-VPN] Starting VpnService TUN tunnel: IP=%s, Gateway=%s, SOCKS=%s", v.tunIP, v.gateway, socksAddr)
 	log.Printf("[Android-VPN] Calling jni.StartTun2Socks with FD=%d, tunIP=%s, gateway=%s, socksAddr=%s", simulatedFD, v.tunIP, v.gateway, socksAddr)
 
-	jni.StartTun2Socks(simulatedFD, v.tunIP, v.gateway, socksAddr)
+	if err := jni.StartTun2Socks(simulatedFD, v.tunIP, v.gateway, socksAddr); err != nil {
+		v.active = false
+		log.Printf("[Android-VPN] Failed to start tun2socks: %v", err)
+		return fmt.Errorf("start tun2socks: %w", err)
+	}
 
 	v.active = true
 	log.Printf("[Android-VPN] VPN started successfully, active=true")
@@ -38,8 +51,13 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 //
 //export StartVPNWithFD
 func StartVPNWithFD(fd int, socksAddr string) {
-	log.Printf("[Android-VPN] Received real VpnService FD=%d from Android host", fd)
-	androidFD = fd
+	log.Printf("[Android-VPN] Received real VpnService FD=%d from Android host (socks: %s)", fd, socksAddr)
+	if socksAddr != "" {
+		androidMu.Lock()
+		currentSocksAddr = socksAddr
+		androidMu.Unlock()
+	}
+	updateAndroidFD(fd)
 }
 
 // JNI export for GoOutVpnService.java nativeStartVPNWithFD
@@ -47,7 +65,33 @@ func StartVPNWithFD(fd int, socksAddr string) {
 //export Java_com_gzjjjfree_goout_GoOutVpnService_nativeStartVPNWithFD
 func Java_com_gzjjjfree_goout_GoOutVpnService_nativeStartVPNWithFD(env uintptr, thiz uintptr, fd int, socksAddrPtr uintptr) {
 	log.Printf("[Android-JNI] nativeStartVPNWithFD called from Android VpnService with FD=%d", fd)
+	updateAndroidFD(fd)
+}
+
+func updateAndroidFD(fd int) {
+	androidMu.Lock()
 	androidFD = fd
+	v := activeVPN
+	socks := currentSocksAddr
+	androidMu.Unlock()
+
+	if v != nil {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		if v.active {
+			log.Printf("[Android-VPN] VPN is active and new FD=%d received. Restarting tun2socks with real FD...", fd)
+			jni.StopTun2Socks()
+			if socks == "" {
+				socks = "127.0.0.1:10808"
+			}
+			if err := jni.StartTun2Socks(fd, v.tunIP, v.gateway, socks); err != nil {
+				log.Printf("[Android-VPN] Failed to restart tun2socks with real FD=%d: %v", fd, err)
+				v.active = false
+				return
+			}
+			log.Printf("[Android-VPN] tun2socks restarted successfully with real FD=%d", fd)
+		}
+	}
 }
 
 // RegisterProtectCallback registers a callback function from Java/Kotlin to protect socket fds via VpnService.protect(fd).
@@ -85,7 +129,12 @@ func (v *VPNServiceManager) StopVPN() error {
 
 	log.Println("[Android-VPN] Stopping Android VpnService TUN tunnel")
 	jni.StopTun2Socks()
+
+	androidMu.Lock()
 	androidFD = -1
+	activeVPN = nil
+	androidMu.Unlock()
+
 	v.active = false
 	return nil
 }
