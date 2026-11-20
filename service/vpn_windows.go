@@ -108,6 +108,9 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.originalGateway = getDefaultGatewayWindows(v.gateway)
 	log.Printf("[Windows-VPN] Recorded physical gateway: %s", v.originalGateway)
 
+	// 0. 清理可能残留的 /1 路由，然后再添加 /32 直连路由
+	cleanupSplitRoutes()
+
 	// 提取 SOCKS 服务器 host 及加载 data/result.json 与配置文件中的所有代理 IP，并添加 /32 直连物理网关路由（防止路由回环）
 	if idx := strings.LastIndex(socksAddr, ":"); idx != -1 {
 		v.socksHost = socksAddr[:idx]
@@ -116,14 +119,6 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	}
 
 	v.proxyHosts = v.loadProxyHosts()
-
-	// 如果 socksHost 是回环地址（如 127.0.0.1），为防止全局 /1 路由（0.0.0.0/1）劫持本地回环流量，
-	// 显式添加高优先级 /32 路由绑定到 loopback 接口 (if 1)
-	if ip := net.ParseIP(v.socksHost); ip != nil && ip.IsLoopback() {
-		metric := getLoopbackMetric()
-		_ = runHiddenCommandRun("route", "add", v.socksHost, "mask", "255.255.255.255", "0.0.0.0", "metric", metric, "if", "1")
-		log.Printf("[Windows-VPN] Ensured explicit loopback route for SOCKS host %s via interface 1 (metric %s)", v.socksHost, metric)
-	}
 
 	if v.originalGateway != "" {
 		for _, host := range v.proxyHosts {
@@ -178,7 +173,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	// 4. 为 GoOutTUN 配置静态 DNS，确保 DNS 查询走入 TUN 隧道
 	dnsServer := v.dnsServer
 	if dnsServer == "" {
-		dnsServer = "1.1.1.1"
+		dnsServer = "8.8.8.8"
 	}
 	v.logPrintf("[Windows-VPN-DNS] Setting GoOutTUN interface static DNS server to: %s (DNS request flow entering TUN tunnel)", dnsServer)
 	errDns := runHiddenCommandRun("netsh", "interface", "ip", "set", "dns", "name=GoOutTUN", "static", dnsServer)
@@ -196,10 +191,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	tunIfIndex := getInterfaceIndexByName("GoOutTUN")
 	log.Printf("[Windows-VPN] Detected GoOutTUN interface index: %s", tunIfIndex)
 
-	// 7. 清理可能残留的 /1 路由
-	v.cleanupRouting()
-
-	// 8. 添加两条 /1 路由（0.0.0.0/1 和 128.0.0.0/1），下一跳设为 0.0.0.0 (on-link) 并绑定到 GoOutTUN 接口
+	// 7. 添加两条 /1 路由（0.0.0.0/1 和 128.0.0.0/1），下一跳设为 0.0.0.0 (on-link) 并绑定到 GoOutTUN 接口
 	var err1, err2 error
 	if tunIfIndex != "" {
 		err1 = runHiddenCommandRun("route", "add", "0.0.0.0", "mask", "128.0.0.0", "0.0.0.0", "metric", "5", "if", tunIfIndex)
@@ -220,10 +212,15 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	return nil
 }
 
-// cleanupRouting 清理添加的两条 /1 路由及所有代理 IP / DNS 直连 /32 路由
-func (v *VPNServiceManager) cleanupRouting() {
+// cleanupSplitRoutes 仅清理可能残留的两条 /1 路由，避免清理刚加好的 /32 直连路由
+func cleanupSplitRoutes() {
 	_ = runHiddenCommandRun("route", "delete", "0.0.0.0", "mask", "128.0.0.0")
 	_ = runHiddenCommandRun("route", "delete", "128.0.0.0", "mask", "128.0.0.0")
+}
+
+// cleanupRouting 清理添加的两条 /1 路由及所有代理 IP / DNS 直连 /32 路由
+func (v *VPNServiceManager) cleanupRouting() {
+	cleanupSplitRoutes()
 	for _, host := range v.proxyHosts {
 		_ = runHiddenCommandRun("route", "delete", host, "mask", "255.255.255.255")
 		_ = runHiddenCommandRun("route", "delete", host)
