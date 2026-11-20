@@ -12,7 +12,7 @@
             "tag": "gz",
             "port": 10908,
             "listen": "127.0.0.1",
-            "protocol": "http",
+            "protocol": "socks",
             "sniffing": {
                 "enabled": true,
                 "destOverride": [

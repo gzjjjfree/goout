@@ -3,52 +3,41 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
-	"syscall"
-	"unsafe"
-
-	"github.com/gzjjjfree/goout/jni"
+	"strings"
 )
 
-var (
-	utunFile *os.File
-	utunName string
-)
-
-const (
-	sysprotoControl = 2
-	utunOptIfname   = 2
-)
-
-func getUtunName(fd uintptr) (string, error) {
-	var ifname [64]byte
-	l := uint32(len(ifname))
-	_, _, errno := syscall.Syscall6(
-		syscall.SYS_GETSOCKOPT,
-		fd,
-		uintptr(sysprotoControl),
-		uintptr(utunOptIfname),
-		uintptr(unsafe.Pointer(&ifname[0])),
-		uintptr(unsafe.Pointer(&l)),
-		0,
-	)
-	if errno != 0 {
-		return "", errno
-	}
-	name := string(ifname[:l])
-	for i, c := range name {
-		if c == 0 {
-			name = name[:i]
-			break
-		}
-	}
-	return name, nil
+func runCommand(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	return cmd.CombinedOutput()
 }
 
-// StartVPN initializes macOS UTUN interface and routing table for global proxy with real file descriptor.
+// getActiveNetworkServices returns a list of network services on macOS
+func getActiveNetworkServices() []string {
+	out, err := runCommand("networksetup", "-listallnetworkservices")
+	if err != nil {
+		return []string{"Wi-Fi", "Ethernet"}
+	}
+	lines := strings.Split(string(out), "\n")
+	var services []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "An asterisk") {
+			continue
+		}
+		services = append(services, line)
+	}
+	if len(services) == 0 {
+		services = []string{"Wi-Fi", "Ethernet"}
+	}
+	return services
+}
+
+// StartVPN enables macOS System Proxy pointing to the local proxy address (mirroring Windows System Proxy implementation).
 func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -57,61 +46,62 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		return nil
 	}
 
-	log.Printf("[macOS-VPN] Starting macOS UTUN interface & routing table: IP=%s, Gateway=%s, SOCKS=%s", v.tunIP, v.gateway, socksAddr)
+	log.Printf("[macOS-SystemProxy] Enabling macOS System Proxy: %s", socksAddr)
 
-	file, err := os.OpenFile("/dev/utun", os.O_RDWR, 0)
-	if err != nil {
-		log.Printf("[macOS-VPN] Failed to open /dev/utun: %v (requires root/administrative privileges or simulation mode)", err)
-	} else {
-		utunFile = file
+	isHttp := false
+	host := "127.0.0.1"
+	port := "10808"
+	if parts := strings.Split(socksAddr, ":"); len(parts) == 2 {
+		host = parts[0]
+		port = parts[1]
 	}
 
-	simulatedFD := -1
-	if utunFile != nil {
-		simulatedFD = int(utunFile.Fd())
-		if name, err := getUtunName(utunFile.Fd()); err == nil && name != "" {
-			utunName = name
-			log.Printf("[macOS-VPN] Allocated UTUN interface name: %s", utunName)
-		} else {
-			utunName = "utun3"
-			log.Printf("[macOS-VPN] Failed to get UTUN interface name via getsockopt: %v, falling back to %s", err, utunName)
+	configPaths := []string{"goout.json", "data/goout.json", "config_save.json"}
+	for _, path := range configPaths {
+		if content, err := os.ReadFile(path); err == nil {
+			var raw map[string]interface{}
+			if err := json.Unmarshal(content, &raw); err == nil {
+				if inbounds, ok := raw["inbounds"].([]interface{}); ok {
+					for _, ib := range inbounds {
+						if ibMap, ok := ib.(map[string]interface{}); ok {
+							if proto, ok := ibMap["protocol"].(string); ok && proto == "http" {
+								isHttp = true
+								if p, ok := ibMap["port"].(float64); ok && p > 0 {
+									port = fmt.Sprintf("%d", int(p))
+								} else if p, ok := ibMap["port"].(int); ok && p > 0 {
+									port = fmt.Sprintf("%d", p)
+								}
+								break
+							}
+						}
+					}
+				}
+			}
 		}
-	} else {
-		utunName = "utun3"
 	}
 
-	ifconfigCmdStr := fmt.Sprintf("ifconfig %s %s %s up", utunName, v.tunIP, v.gateway)
-	log.Printf("[macOS-VPN] Executing command: %s", ifconfigCmdStr)
-	cmdIfconfig := exec.Command("ifconfig", utunName, v.tunIP, v.gateway, "up")
-	if err := cmdIfconfig.Run(); err != nil {
-		log.Printf("[macOS-VPN] ifconfig setup notice: %v", err)
-	} else {
-		log.Printf("[macOS-VPN] ifconfig executed successfully.")
-	}
-
-	routeCmd := exec.Command("route", "change", "default", v.gateway)
-	log.Printf("[macOS-VPN] Executing command: route change default %s", v.gateway)
-	if err := routeCmd.Run(); err != nil {
-		log.Printf("[macOS-VPN] route change default notice: %v, trying route add...", err)
-		cmdRoute := exec.Command("route", "add", "default", v.gateway)
-		if errAdd := cmdRoute.Run(); errAdd != nil {
-			log.Printf("[macOS-VPN] route add default error: %v", errAdd)
+	services := getActiveNetworkServices()
+	for _, svc := range services {
+		if isHttp {
+			_ = exec.Command("networksetup", "-setwebproxy", svc, host, port).Run()
+			_ = exec.Command("networksetup", "-setwebproxystate", svc, "on").Run()
+			_ = exec.Command("networksetup", "-setsecurewebproxy", svc, host, port).Run()
+			_ = exec.Command("networksetup", "-setsecurewebproxystate", svc, "on").Run()
+			log.Printf("[macOS-SystemProxy] Configured Web/SecureWeb proxy on %s -> %s:%s", svc, host, port)
 		} else {
-			log.Printf("[macOS-VPN] route added successfully.")
+			_ = exec.Command("networksetup", "-setsocksfirewallproxy", svc, host, port).Run()
+			_ = exec.Command("networksetup", "-setsocksfirewallproxystate", svc, "on").Run()
+			log.Printf("[macOS-SystemProxy] Configured SOCKS firewall proxy on %s -> %s:%s", svc, host, port)
 		}
-	} else {
-		log.Printf("[macOS-VPN] route changed default successfully.")
 	}
 
-	log.Printf("[macOS-VPN] Calling jni.StartTun2Socks with real FD=%d, tunIP=%s, gateway=%s, socksAddr=%s", simulatedFD, v.tunIP, v.gateway, socksAddr)
-	jni.StartTun2Socks(simulatedFD, v.tunIP, v.gateway, socksAddr)
-
+	v.socksHost = socksAddr
 	v.active = true
-	log.Printf("[macOS-VPN] VPN started successfully, active=true")
+	log.Println("[macOS-SystemProxy] macOS System Proxy enabled successfully.")
 	return nil
 }
 
-// StopVPN stops macOS UTUN tunnel and restores system routing.
+// StopVPN disables macOS System Proxy and restores direct connection.
 func (v *VPNServiceManager) StopVPN() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -120,19 +110,16 @@ func (v *VPNServiceManager) StopVPN() error {
 		return nil
 	}
 
-	log.Println("[macOS-VPN] Stopping macOS UTUN tunnel & restoring default routing")
-	jni.StopTun2Socks()
+	log.Println("[macOS-SystemProxy] Disabling macOS System Proxy...")
 
-	if utunFile != nil {
-		_ = utunFile.Close()
-		utunFile = nil
-	}
-
-	cmdRoute := exec.Command("route", "delete", "default")
-	if err := cmdRoute.Run(); err != nil {
-		log.Printf("[macOS-VPN] route restore error: %v", err)
+	services := getActiveNetworkServices()
+	for _, svc := range services {
+		_ = exec.Command("networksetup", "-setwebproxystate", svc, "off").Run()
+		_ = exec.Command("networksetup", "-setsecurewebproxystate", svc, "off").Run()
+		_ = exec.Command("networksetup", "-setsocksfirewallproxystate", svc, "off").Run()
 	}
 
 	v.active = false
+	log.Println("[macOS-SystemProxy] macOS System Proxy disabled successfully.")
 	return nil
 }
