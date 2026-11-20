@@ -117,6 +117,14 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 
 	v.proxyHosts = v.loadProxyHosts()
 
+	// 如果 socksHost 是回环地址（如 127.0.0.1），为防止全局 /1 路由（0.0.0.0/1）劫持本地回环流量，
+	// 显式添加高优先级 /32 路由绑定到 loopback 接口 (if 1)
+	if ip := net.ParseIP(v.socksHost); ip != nil && ip.IsLoopback() {
+		metric := getLoopbackMetric()
+		_ = runHiddenCommandRun("route", "add", v.socksHost, "mask", "255.255.255.255", "0.0.0.0", "metric", metric, "if", "1")
+		log.Printf("[Windows-VPN] Ensured explicit loopback route for SOCKS host %s via interface 1 (metric %s)", v.socksHost, metric)
+	}
+
 	if v.originalGateway != "" {
 		for _, host := range v.proxyHosts {
 			errRoute := runHiddenCommandRun("route", "add", host, "mask", "255.255.255.255", v.originalGateway, "metric", "1")
@@ -221,8 +229,12 @@ func (v *VPNServiceManager) cleanupRouting() {
 		_ = runHiddenCommandRun("route", "delete", host)
 	}
 	if v.socksHost != "" {
-		_ = runHiddenCommandRun("route", "delete", v.socksHost, "mask", "255.255.255.255")
-		_ = runHiddenCommandRun("route", "delete", v.socksHost)
+		if ip := net.ParseIP(v.socksHost); ip == nil || !ip.IsLoopback() {
+			_ = runHiddenCommandRun("route", "delete", v.socksHost, "mask", "255.255.255.255")
+			_ = runHiddenCommandRun("route", "delete", v.socksHost)
+		} else {
+			log.Printf("[Windows-VPN] Preserving loopback SOCKS host route: %s", v.socksHost)
+		}
 	}
 	if v.dnsServer != "" {
 		_ = runHiddenCommandRun("route", "delete", v.dnsServer, "mask", "255.255.255.255")
