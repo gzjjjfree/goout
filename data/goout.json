@@ -10,9 +10,9 @@
     "inbounds": [
         {
             "tag": "gz",
-            "port": 10808,
+            "port": 10908,
             "listen": "127.0.0.1",
-            "protocol": "socks",
+            "protocol": "http",
             "sniffing": {
                 "enabled": true,
                 "destOverride": [
@@ -98,6 +98,16 @@
             {
                 "type": "field",
                 "balancerTag": "cdn-balancer-proxy",
+                "domain": [
+                    "geosite:geolocation-!cn"
+                ],
+                "inboundTag": [
+                    "gz"
+                ]
+            },
+            {
+                "type": "field",
+                "outboundTag": "direct",
                 "inboundTag": [
                     "gz"
                 ]
