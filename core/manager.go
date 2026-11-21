@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -228,26 +227,20 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 
 	m.emitLog("Starting V2Ray core in-memory instance...")
 
-	// Panic Recovery 保护：防止底层核心崩溃导致整个 Fyne UI 进程闪退
+	effectiveConfig := ensureV2rayLogEnabled(configJSON)
+
 	var instance *v2core.Instance
 	var startErr error
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				err = fmt.Errorf("v2ray core panicked: %v\n%s", r, debug.Stack())
-				m.mu.Lock()
-				m.isRunning = false
-				m.instance = nil
-				if m.cancel != nil {
-					m.cancel()
+				if startErr == nil {
+					startErr = fmt.Errorf("v2ray core panicked: %v", r)
 				}
-				m.mu.Unlock()
-				m.emitLog(err.Error())
 			}
 		}()
 
-		effectiveConfig := ensureV2rayLogEnabled(configJSON)
-		instance, startErr = v2core.StartInstance("json", effectiveConfig)
+		instance, startErr = startInstanceWithTimeout(effectiveConfig, 20*time.Second)
 	}()
 
 	if startErr != nil {
@@ -379,4 +372,40 @@ func ensureV2rayLogEnabled(configJSON []byte) []byte {
 		return modified
 	}
 	return configJSON
+}
+
+// startInstanceWithTimeout 调用 v2ray-core 的 StartInstance，并加超时保护。
+// 防止某个平台（如 Android 的 netpoll/epoll）让 StartInstance 永久挂起，
+// 导致整个 UI 进程卡在"启动中"。
+func startInstanceWithTimeout(config []byte, timeout time.Duration) (*v2core.Instance, error) {
+	done := make(chan struct {
+		inst *v2core.Instance
+		err  error
+	}, 1)
+
+	go func() {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					done <- struct {
+						inst *v2core.Instance
+						err  error
+					}{nil, fmt.Errorf("v2ray core panicked: %v", r)}
+					return
+				}
+			}()
+			inst, err := v2core.StartInstance("json", config)
+			done <- struct {
+				inst *v2core.Instance
+				err  error
+			}{inst, err}
+		}()
+	}()
+
+	select {
+	case res := <-done:
+		return res.inst, res.err
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("v2ray core StartInstance timed out after %s (Android 端可能是 netpoll/epoll 挂起)", timeout)
+	}
 }
