@@ -32,6 +32,11 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	activeVPN = v
 	currentSocksAddr = socksAddr
 	simulatedFD := androidFD
+
+	if simulatedFD < 0 {
+		return fmt.Errorf("Android VPN: 暂无 VpnService 的 TUN FD（服务未启动）")
+	}
+
 	androidMu.Unlock()
 
 	log.Printf("[Android-VPN] Starting VpnService TUN tunnel: IP=%s, Gateway=%s, SOCKS=%s", v.tunIP, v.gateway, socksAddr)
@@ -101,6 +106,7 @@ func RegisterProtectCallback(fn func(int) bool) {
 }
 
 // ProtectSocket calls the registered protect function to exempt a socket FD from VPN routing.
+//
 //export ProtectSocket
 func ProtectSocket(fd int) bool {
 	if protectFunc != nil {
