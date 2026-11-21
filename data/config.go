@@ -4,8 +4,10 @@ package data
 import (
 	_ "embed"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -29,6 +31,17 @@ func getTargetDir() string {
 	if targetDir == "" {
 		targetDir = "."
 	}
+
+	// Android：原生库 libgoout.so 位于只读的 lib 目录里，
+	// geosite.dat / result.json / 配置文件等运行时资产无法写入，
+	// 因此统一改写到可写的缓存 / 文件目录，跨安装类型都能稳定工作。
+	if runtime.GOOS == "android" {
+		if writable := getWritableDir(); writable != "" {
+			targetDir = writable
+		}
+		log.Printf("[GoOut] targetDir=%s ", targetDir)
+	}
+
 	return targetDir
 }
 
@@ -221,10 +234,18 @@ func mergeMap(base, user map[string]interface{}) {
 						newItem[k] = v
 					}
 					// Only update modifiable fields: tag, port, listen, protocol
-					if t, exists := uMap["tag"]; exists { newItem["tag"] = t }
-					if p, exists := uMap["port"]; exists { newItem["port"] = p }
-					if l, exists := uMap["listen"]; exists { newItem["listen"] = l }
-					if pr, exists := uMap["protocol"]; exists { newItem["protocol"] = pr }
+					if t, exists := uMap["tag"]; exists {
+						newItem["tag"] = t
+					}
+					if p, exists := uMap["port"]; exists {
+						newItem["port"] = p
+					}
+					if l, exists := uMap["listen"]; exists {
+						newItem["listen"] = l
+					}
+					if pr, exists := uMap["protocol"]; exists {
+						newItem["protocol"] = pr
+					}
 					mergedInbounds[i] = newItem
 				} else {
 					mergedInbounds[i] = uItem
@@ -266,11 +287,21 @@ func mergeMap(base, user map[string]interface{}) {
 					for k, v := range matchedBaseMap {
 						newItem[k] = v
 					}
-					if t, exists := uMap["tag"]; exists { newItem["tag"] = t }
-					if pr, exists := uMap["protocol"]; exists { newItem["protocol"] = pr }
-					if us, exists := uMap["settings"]; exists { newItem["settings"] = us }
-					if ust, exists := uMap["streamSettings"]; exists { newItem["streamSettings"] = ust }
-					if mux, exists := uMap["mux"]; exists { newItem["mux"] = mux }
+					if t, exists := uMap["tag"]; exists {
+						newItem["tag"] = t
+					}
+					if pr, exists := uMap["protocol"]; exists {
+						newItem["protocol"] = pr
+					}
+					if us, exists := uMap["settings"]; exists {
+						newItem["settings"] = us
+					}
+					if ust, exists := uMap["streamSettings"]; exists {
+						newItem["streamSettings"] = ust
+					}
+					if mux, exists := uMap["mux"]; exists {
+						newItem["mux"] = mux
+					}
 					mergedOutbounds[i] = newItem
 				} else {
 					mergedOutbounds[i] = uItem
