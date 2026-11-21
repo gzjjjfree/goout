@@ -52,7 +52,7 @@ void androidStartVpnService(uintptr_t envPtr, uintptr_t activityPtr, const char 
         (*env)->ExceptionDescribe(env);
         (*env)->ExceptionClear(env);
     }
-    (*env)->DeleteLocalRef(jaddr);
+    (*env)->DeleteLocalRef(env, jaddr);
 }
 
 // androidStopVpnService 通过 JNI 调用 GoOutVpnService.stopVpnService 停止服务。
