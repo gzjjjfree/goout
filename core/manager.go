@@ -196,7 +196,7 @@ func (m *V2rayManager) GetLogs() []string {
 // Start 在内存中启动 V2Ray 实例（带 Panic Recovery 与并发保护）
 func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	m.emitLog("Starting V2Ray core instance...")
-	log.Printf("[Log] Starting V2Ray core instance...")
+
 	// 若上一次关闭尚未完成，先等待其结束，
 	// 保证旧实例的监听端口已释放，避免启动新实例时端口冲突。
 	m.mu.Lock()
@@ -205,6 +205,7 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	m.mu.Unlock()
 
 	if closing {
+		m.emitLog(" V2Ray core closing...")
 		select {
 		case <-ch:
 		case <-time.After(5 * time.Second):
@@ -218,8 +219,10 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 		return fmt.Errorf("v2ray core instance is already running")
 	}
 
+	m.emitLog(" V2Ray core data.EnsureGeositeDat()...")
 	// 确保 geosite.dat 资产文件及 result.json 已通过 go:embed 释放到运行目录
 	data.EnsureGeositeDat()
+	m.emitLog(" V2Ray core data.EnsureResultJSON()...")
 	data.EnsureResultJSON()
 
 	ctx, cancel := context.WithCancel(context.Background())
