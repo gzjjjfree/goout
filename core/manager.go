@@ -227,6 +227,7 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	data.EnsureResultJSON()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	m.mu.Lock()
 	m.ctx = ctx
 	m.cancel = cancel
 	m.mu.Unlock()
