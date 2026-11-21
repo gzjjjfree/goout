@@ -21,11 +21,12 @@ import (
 #include <android/log.h>
 #include <stdlib.h>
 
-// androidStartVpnService 通过 JNI 调起 Android 端的 GoOutVpnService。
-//   envPtr      -> JNIEnv*
-//   activityPtr -> android.app.Activity（作为 Context 使用）
-//   socksAddr   -> UTF-8 C 字符串，例如 127.0.0.1:10808
-void androidStartVpnService(uintptr_t envPtr, uintptr_t activityPtr, const char *socksAddr) {
+// 注意：static 是关键。
+// cgo 在 -buildmode=c-shared 模式下会把内联 C 代码的符号以全局链接属性发出，
+// 若为普通全局函数，同一份符号可能被塞进两个 .o，链接时即 duplicate symbol。
+// 改为 static 后每个文件各持一份局部符号，cgo 生成的 wrapper 在同一翻译单元内即可调用。
+
+static void androidStartVpnService(uintptr_t envPtr, uintptr_t activityPtr, const char *socksAddr) {
     JNIEnv *env = (JNIEnv *)envPtr;
     jobject activity = (jobject)activityPtr;
     if (!env || !activity) {
@@ -52,11 +53,11 @@ void androidStartVpnService(uintptr_t envPtr, uintptr_t activityPtr, const char 
         (*env)->ExceptionDescribe(env);
         (*env)->ExceptionClear(env);
     }
+    // Android NDK 的 DeleteLocalRef 需要 (env, ref) 两个参数。
     (*env)->DeleteLocalRef(env, jaddr);
 }
 
-// androidStopVpnService 通过 JNI 调用 GoOutVpnService.stopVpnService 停止服务。
-void androidStopVpnService(uintptr_t envPtr, uintptr_t activityPtr) {
+static void androidStopVpnService(uintptr_t envPtr, uintptr_t activityPtr) {
     JNIEnv *env = (JNIEnv *)envPtr;
     jobject activity = (jobject)activityPtr;
     if (!env || !activity) {
