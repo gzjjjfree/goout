@@ -12,6 +12,8 @@ import (
 func main() {
 	defer core.CloseLog()
 
+	core.InstallStdioCapture() // ← 加这一行：在启动 V2Ray / tun2socks 之前，把 stdout/stderr 注入日志栏
+
 	a := app.NewWithID("com.gzjjjfree.goout")
 	a.Settings().SetTheme(theme.LightTheme())
 	w := a.NewWindow("GoOut - 代理与系统工具")
