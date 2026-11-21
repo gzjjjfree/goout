@@ -218,6 +218,7 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 		m.mu.Unlock()
 		return fmt.Errorf("v2ray core instance is already running")
 	}
+	m.mu.Unlock()
 
 	m.emitLog(" V2Ray core data.EnsureGeositeDat()...")
 	// 确保 geosite.dat 资产文件及 result.json 已通过 go:embed 释放到运行目录
