@@ -63,13 +63,40 @@ func StartTun2Socks(fd int, tunAddr, gateway, socksServer string) error {
 	}
 
 	log.Printf("[Tun2Socks] Inserting engine config: Device=%s, Proxy=%s", deviceStr, proxyURL)
-	engine.Insert(&engine.Key{
-		Device:   deviceStr,
-		Proxy:    proxyURL,
-		LogLevel: "info",
-	})
 
-	engine.Start()
+	// engine.Insert / engine.Start 在错误设备（如 Android 上 fd=-1 时构造出的
+	// tun://tun0）上可能 panic。用 recover 将 panic 转为 error 返回，避免冒泡到
+	// 上层 goroutine 导致整个进程闪退。
+	var insertErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				insertErr = fmt.Errorf("tun2socks engine.Insert panic: %v", r)
+			}
+		}()
+		engine.Insert(&engine.Key{
+			Device:   deviceStr,
+			Proxy:    proxyURL,
+			LogLevel: "info",
+		})
+	}()
+	if insertErr != nil {
+		return insertErr
+	}
+
+	var startErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				startErr = fmt.Errorf("tun2socks engine.Start panic: %v", r)
+			}
+		}()
+		engine.Start()
+	}()
+	if startErr != nil {
+		return startErr
+	}
+
 	log.Println("[Tun2Socks] tun2socks engine started successfully.")
 	return nil
 }
@@ -77,7 +104,15 @@ func StartTun2Socks(fd int, tunAddr, gateway, socksServer string) error {
 // StopTun2Socks stops the tun2socks engine.
 func StopTun2Socks() {
 	log.Println("[Tun2Socks] Stopping tun2socks engine...")
-	engine.Stop()
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[Tun2Socks] Stop panic recovered: %v", r)
+			}
+		}()
+		engine.Stop()
+	}()
+
 	log.Println("[Tun2Socks] tun2socks engine stopped.")
 }
-

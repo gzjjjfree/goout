@@ -1,3 +1,4 @@
+// core/manager_test.go
 package core
 
 import (

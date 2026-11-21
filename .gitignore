@@ -5,6 +5,7 @@ bundletool*
 *.apks
 *.jks
 *.sh
+*.log
 
 AGENTS.md
 ARCH_NOTES.md

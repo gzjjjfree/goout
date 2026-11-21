@@ -1,3 +1,4 @@
+// data/config.go
 package data
 
 import (

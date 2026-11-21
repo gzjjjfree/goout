@@ -1,3 +1,4 @@
+// core/statusbar/statusbar_stub.go
 //go:build !android
 
 package statusbar

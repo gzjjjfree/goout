@@ -1,3 +1,4 @@
+// service/vpn_stub.go
 //go:build !windows && !android && !darwin
 
 package service

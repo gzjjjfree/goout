@@ -1,3 +1,4 @@
+// ui/dashboard.go
 package ui
 
 import (
@@ -8,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -137,6 +139,16 @@ func SetupDashboard(w fyne.Window) {
 				updateStatus()
 			})
 
+			// 顶层兜底：即使底层 panic/崩溃冒泡上来，也弹错误框而不是闪退。
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[Dashboard] VPN 启动 panic 已恢复: %v\n%s", r, debug.Stack())
+					fyne.Do(func() {
+						dialog.ShowError(fmt.Errorf("VPN 启动异常: %v", r), w)
+					})
+				}
+			}()
+
 			if !vpnMgr.IsRunning() {
 				fyne.Do(func() {
 					statusLabel.SetText("状态: VPN 启动中...")
@@ -224,7 +236,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 	}
 	fileBytes, err := os.ReadFile(configPath)
 	var rawCfg map[string]interface{}
-	
+
 	defaultBytes := data.GetDefaultConfigBytes()
 	_ = json.Unmarshal(defaultBytes, &rawCfg)
 
@@ -248,7 +260,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 	// 2. 入站设置 UI
 	inboundsContainer := container.NewVBox()
 	var updateInboundsUI func()
-	
+
 	getInboundsList := func() []interface{} {
 		if rawCfg["inbounds"] != nil {
 			if list, ok := rawCfg["inbounds"].([]interface{}); ok {
@@ -310,7 +322,9 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			// 实时同步修改回 inboundMap
 			tagEntry.OnChanged = func(s string) { inboundMap["tag"] = s }
 			portEntryItem.OnChanged = func(s string) {
-				inboundMap["port"] = s
+				if pi, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && pi > 0 {
+					inboundMap["port"] = pi // ← 存 int
+				}
 			}
 			listenEntry.OnChanged = func(s string) { inboundMap["listen"] = s }
 			protoEntry.OnChanged = func(s string) { inboundMap["protocol"] = s }
@@ -397,11 +411,19 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			if settings, ok := outMap["settings"].(map[string]interface{}); ok {
 				if vnext, ok := settings["vnext"].([]interface{}); ok && len(vnext) > 0 {
 					if vn, ok := vnext[0].(map[string]interface{}); ok {
-						if addr, ok := vn["address"].(string); ok { address = addr }
-						if p, ok := vn["port"].(float64); ok { port = int(p) } else if p, ok := vn["port"].(int); ok { port = p }
+						if addr, ok := vn["address"].(string); ok {
+							address = addr
+						}
+						if p, ok := vn["port"].(float64); ok {
+							port = int(p)
+						} else if p, ok := vn["port"].(int); ok {
+							port = p
+						}
 						if users, ok := vn["users"].([]interface{}); ok && len(users) > 0 {
 							if u, ok := users[0].(map[string]interface{}); ok {
-								if uid, ok := u["id"].(string); ok { id = uid }
+								if uid, ok := u["id"].(string); ok {
+									id = uid
+								}
 							}
 						}
 					}
@@ -410,14 +432,24 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 
 			if stream, ok := outMap["streamSettings"].(map[string]interface{}); ok {
 				if tls, ok := stream["tlsSettings"].(map[string]interface{}); ok {
-					if sn, ok := tls["serverName"].(string); ok { serverName = sn }
-					if ed, ok := tls["echDohServer"].(string); ok { echDohServer = ed }
+					if sn, ok := tls["serverName"].(string); ok {
+						serverName = sn
+					}
+					if ed, ok := tls["echDohServer"].(string); ok {
+						echDohServer = ed
+					}
 				}
 				if ws, ok := stream["wsSettings"].(map[string]interface{}); ok {
-					if pth, ok := ws["path"].(string); ok { path = pth }
+					if pth, ok := ws["path"].(string); ok {
+						path = pth
+					}
 					if headers, ok := ws["headers"].(map[string]interface{}); ok {
-						if h, ok := headers["Host"].(string); ok { host = h }
-						if ua, ok := headers["User-Agent"].(string); ok { userAgent = ua }
+						if h, ok := headers["Host"].(string); ok {
+							host = h
+						}
+						if ua, ok := headers["User-Agent"].(string); ok {
+							userAgent = ua
+						}
 					}
 				}
 			}
@@ -425,7 +457,9 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			addrEntryItem := widget.NewEntry()
 			addrEntryItem.SetText(address)
 			portEntryItem := widget.NewEntry()
-			if port > 0 { portEntryItem.SetText(strconv.Itoa(port)) }
+			if port > 0 {
+				portEntryItem.SetText(strconv.Itoa(port))
+			}
 			idEntry := widget.NewEntry()
 			idEntry.SetText(id)
 			snEntry := widget.NewEntry()
@@ -472,7 +506,10 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			protoEntry.OnChanged = func(s string) { outMap["protocol"] = s }
 			addrEntryItem.OnChanged = func(s string) {
 				settings, _ := outMap["settings"].(map[string]interface{})
-				if settings == nil { settings = make(map[string]interface{}); outMap["settings"] = settings }
+				if settings == nil {
+					settings = make(map[string]interface{})
+					outMap["settings"] = settings
+				}
 				vnext, _ := settings["vnext"].([]interface{})
 				var vn map[string]interface{}
 				if len(vnext) > 0 {
@@ -487,9 +524,14 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			}
 			portEntryItem.OnChanged = func(s string) {
 				pi, err := strconv.Atoi(s)
-				if err != nil { return }
+				if err != nil {
+					return
+				}
 				settings, _ := outMap["settings"].(map[string]interface{})
-				if settings == nil { settings = make(map[string]interface{}); outMap["settings"] = settings }
+				if settings == nil {
+					settings = make(map[string]interface{})
+					outMap["settings"] = settings
+				}
 				vnext, _ := settings["vnext"].([]interface{})
 				var vn map[string]interface{}
 				if len(vnext) > 0 {
@@ -504,7 +546,10 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			}
 			idEntry.OnChanged = func(s string) {
 				settings, _ := outMap["settings"].(map[string]interface{})
-				if settings == nil { settings = make(map[string]interface{}); outMap["settings"] = settings }
+				if settings == nil {
+					settings = make(map[string]interface{})
+					outMap["settings"] = settings
+				}
 				vnext, _ := settings["vnext"].([]interface{})
 				var vn map[string]interface{}
 				if len(vnext) > 0 {
@@ -529,41 +574,77 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			}
 			snEntry.OnChanged = func(s string) {
 				stream, _ := outMap["streamSettings"].(map[string]interface{})
-				if stream == nil { stream = make(map[string]interface{}); outMap["streamSettings"] = stream }
+				if stream == nil {
+					stream = make(map[string]interface{})
+					outMap["streamSettings"] = stream
+				}
 				tls, _ := stream["tlsSettings"].(map[string]interface{})
-				if tls == nil { tls = make(map[string]interface{}); stream["tlsSettings"] = tls }
+				if tls == nil {
+					tls = make(map[string]interface{})
+					stream["tlsSettings"] = tls
+				}
 				tls["serverName"] = s
 			}
 			edEntry.OnChanged = func(s string) {
 				stream, _ := outMap["streamSettings"].(map[string]interface{})
-				if stream == nil { stream = make(map[string]interface{}); outMap["streamSettings"] = stream }
+				if stream == nil {
+					stream = make(map[string]interface{})
+					outMap["streamSettings"] = stream
+				}
 				tls, _ := stream["tlsSettings"].(map[string]interface{})
-				if tls == nil { tls = make(map[string]interface{}); stream["tlsSettings"] = tls }
+				if tls == nil {
+					tls = make(map[string]interface{})
+					stream["tlsSettings"] = tls
+				}
 				tls["echDohServer"] = s
 			}
 			pathEntry.OnChanged = func(s string) {
 				stream, _ := outMap["streamSettings"].(map[string]interface{})
-				if stream == nil { stream = make(map[string]interface{}); outMap["streamSettings"] = stream }
+				if stream == nil {
+					stream = make(map[string]interface{})
+					outMap["streamSettings"] = stream
+				}
 				ws, _ := stream["wsSettings"].(map[string]interface{})
-				if ws == nil { ws = make(map[string]interface{}); stream["wsSettings"] = ws }
+				if ws == nil {
+					ws = make(map[string]interface{})
+					stream["wsSettings"] = ws
+				}
 				ws["path"] = s
 			}
 			hostEntry.OnChanged = func(s string) {
 				stream, _ := outMap["streamSettings"].(map[string]interface{})
-				if stream == nil { stream = make(map[string]interface{}); outMap["streamSettings"] = stream }
+				if stream == nil {
+					stream = make(map[string]interface{})
+					outMap["streamSettings"] = stream
+				}
 				ws, _ := stream["wsSettings"].(map[string]interface{})
-				if ws == nil { ws = make(map[string]interface{}); stream["wsSettings"] = ws }
+				if ws == nil {
+					ws = make(map[string]interface{})
+					stream["wsSettings"] = ws
+				}
 				headers, _ := ws["headers"].(map[string]interface{})
-				if headers == nil { headers = make(map[string]interface{}); ws["headers"] = headers }
+				if headers == nil {
+					headers = make(map[string]interface{})
+					ws["headers"] = headers
+				}
 				headers["Host"] = s
 			}
 			userAgentEntry.OnChanged = func(s string) {
 				stream, _ := outMap["streamSettings"].(map[string]interface{})
-				if stream == nil { stream = make(map[string]interface{}); outMap["streamSettings"] = stream }
+				if stream == nil {
+					stream = make(map[string]interface{})
+					outMap["streamSettings"] = stream
+				}
 				ws, _ := stream["wsSettings"].(map[string]interface{})
-				if ws == nil { ws = make(map[string]interface{}); stream["wsSettings"] = ws }
+				if ws == nil {
+					ws = make(map[string]interface{})
+					stream["wsSettings"] = ws
+				}
 				headers, _ := ws["headers"].(map[string]interface{})
-				if headers == nil { headers = make(map[string]interface{}); ws["headers"] = headers }
+				if headers == nil {
+					headers = make(map[string]interface{})
+					ws["headers"] = headers
+				}
 				headers["User-Agent"] = s
 			}
 
@@ -593,17 +674,17 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				},
 			},
 			"streamSettings": map[string]interface{}{
-				"network": "ws",
+				"network":  "ws",
 				"security": "tls",
 				"tlsSettings": map[string]interface{}{
-					"serverName": "",
-					"echDohServer": "",
+					"serverName":    "",
+					"echDohServer":  "",
 					"allowInsecure": false,
 				},
 				"wsSettings": map[string]interface{}{
 					"path": "/ws",
 					"headers": map[string]interface{}{
-						"Host": "",
+						"Host":       "",
 						"User-Agent": "",
 					},
 				},
@@ -650,7 +731,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 	if !hasBalancer {
 		routingMap["balancers"] = []interface{}{
 			map[string]interface{}{
-				"tag": "cdn-balancer-proxy",
+				"tag":      "cdn-balancer-proxy",
 				"selector": []interface{}{"cdn-"},
 				"strategy": map[string]interface{}{"type": "random"},
 			},
@@ -673,18 +754,28 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 		list := getRulesList()
 		for i, item := range list {
 			rMap, ok := item.(map[string]interface{})
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 
 			outboundTagEntry := widget.NewEntry()
-			if ot, ok := rMap["outboundTag"].(string); ok { outboundTagEntry.SetText(ot) }
+			if ot, ok := rMap["outboundTag"].(string); ok {
+				outboundTagEntry.SetText(ot)
+			}
 			balancerTagEntry := widget.NewEntry()
-			if bt, ok := rMap["balancerTag"].(string); ok { balancerTagEntry.SetText(bt) }
-			
+			if bt, ok := rMap["balancerTag"].(string); ok {
+				balancerTagEntry.SetText(bt)
+			}
+
 			// inboundTag can be slice or string
 			var inboundTagsStr string
 			if its, ok := rMap["inboundTag"].([]interface{}); ok {
 				var strs []string
-				for _, s := range its { if str, ok := s.(string); ok { strs = append(strs, str) } }
+				for _, s := range its {
+					if str, ok := s.(string); ok {
+						strs = append(strs, str)
+					}
+				}
 				inboundTagsStr = strings.Join(strs, ",")
 			} else if its, ok := rMap["inboundTag"].(string); ok {
 				inboundTagsStr = its
@@ -694,7 +785,11 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			var domainStr string
 			if ds, ok := rMap["domain"].([]interface{}); ok {
 				var strs []string
-				for _, s := range ds { if str, ok := s.(string); ok { strs = append(strs, str) } }
+				for _, s := range ds {
+					if str, ok := s.(string); ok {
+						strs = append(strs, str)
+					}
+				}
 				domainStr = strings.Join(strs, "\n")
 			} else if ds, ok := rMap["domain"].(string); ok {
 				domainStr = ds
@@ -704,7 +799,11 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			var ipStr string
 			if ips, ok := rMap["ip"].([]interface{}); ok {
 				var strs []string
-				for _, s := range ips { if str, ok := s.(string); ok { strs = append(strs, str) } }
+				for _, s := range ips {
+					if str, ok := s.(string); ok {
+						strs = append(strs, str)
+					}
+				}
 				ipStr = strings.Join(strs, "\n")
 			} else if ips, ok := rMap["ip"].(string); ok {
 				ipStr = ips
@@ -734,7 +833,9 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				var clean []interface{}
 				for _, p := range parts {
 					trim := strings.TrimSpace(p)
-					if trim != "" { clean = append(clean, trim) }
+					if trim != "" {
+						clean = append(clean, trim)
+					}
 				}
 				rMap["inboundTag"] = clean
 			}
@@ -743,7 +844,9 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				var clean []interface{}
 				for _, l := range lines {
 					trim := strings.TrimSpace(l)
-					if trim != "" { clean = append(clean, trim) }
+					if trim != "" {
+						clean = append(clean, trim)
+					}
 				}
 				rMap["domain"] = clean
 			}
@@ -752,7 +855,9 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				var clean []interface{}
 				for _, l := range lines {
 					trim := strings.TrimSpace(l)
-					if trim != "" { clean = append(clean, trim) }
+					if trim != "" {
+						clean = append(clean, trim)
+					}
 				}
 				rMap["ip"] = clean
 			}

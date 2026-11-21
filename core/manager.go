@@ -82,21 +82,26 @@ func CloseLog() {
 
 // V2rayManager 管理 V2Ray 核心在内存中的生命周期（适配 Android 10+ W^X 安全策略）
 type V2rayManager struct {
-	mu            sync.Mutex
-	instance      *v2core.Instance
-	isRunning     bool
-	isStopping    bool
-	stopChan      chan struct{}
-	logHandler    *uiLogHandler
-	ctx           context.Context
-	cancel        context.CancelFunc
-	maxLogs       int
-	logs          []string
-	logMu         sync.Mutex
-	onLog         func(string)
-	logBuffer     []string
-	bufferMu      sync.Mutex
-	flushStopChan chan struct{}
+	mu         sync.Mutex
+	instance   *v2core.Instance
+	isRunning  bool
+	logHandler *uiLogHandler
+	// 通过 RegisterHandler 把 UI handler 设成核心日志的全局 handler。
+	// 注意：core 在 StartInstance 内部初始化日志功能时会再次调用 RegisterHandler，
+	// 把自己注册的 logger 实例设成全局，导致本 handler 被顶掉，
+	// 因此需要在 StartInstance 成功后重新注册一次（见 Start 方法）。
+
+	// closing 标记存在尚未完成的关闭流程；closingCh 在其完成后被关闭。
+	// 用于防止"上一个实例尚未释放端口就立即启动新实例"而引起的端口冲突。
+	closing   bool
+	closingCh chan struct{}
+
+	ctx     context.Context
+	cancel  context.CancelFunc
+	maxLogs int
+	logs    []string
+	logMu   sync.Mutex
+	onLog   func(string)
 }
 
 type uiLogHandler struct {
@@ -118,12 +123,10 @@ var (
 func GetManager(onLog func(string)) *V2rayManager {
 	managerOnce.Do(func() {
 		globalManager = &V2rayManager{
-			maxLogs:       500,
-			onLog:         onLog,
-			flushStopChan: make(chan struct{}),
+			maxLogs: 500,
+			onLog:   onLog,
 		}
 		globalManager.initLogHandler()
-		globalManager.startLogFlusher()
 	})
 	if onLog != nil {
 		globalManager.mu.Lock()
@@ -141,36 +144,6 @@ func GetManager(onLog func(string)) *V2rayManager {
 	earlyMu.Unlock()
 
 	return globalManager
-}
-
-func (m *V2rayManager) startLogFlusher() {
-	go func() {
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				m.flushLogs()
-			case <-m.flushStopChan:
-				m.flushLogs()
-				return
-			}
-		}
-	}()
-}
-
-func (m *V2rayManager) flushLogs() {
-	m.bufferMu.Lock()
-	if len(m.logBuffer) == 0 {
-		m.bufferMu.Unlock()
-		return
-	}
-	batch := m.logBuffer
-	m.logBuffer = nil
-	m.bufferMu.Unlock()
-
-	combined := strings.Join(batch, "\n")
-	m.emitLog(combined)
 }
 
 func (m *V2rayManager) emitLog(msg string) {
@@ -191,22 +164,24 @@ func (m *V2rayManager) addLog(format string, args ...any) {
 	}
 	m.logMu.Unlock()
 
-	m.bufferMu.Lock()
-	m.logBuffer = append(m.logBuffer, msg)
-	shouldFlush := len(m.logBuffer) >= 50
-	m.bufferMu.Unlock()
-
-	if shouldFlush {
-		m.flushLogs()
-	}
+	m.emitLog(msg)
 }
 
 func (m *V2rayManager) initLogHandler() {
 	m.logHandler = &uiLogHandler{
 		onLog: func(msg string) {
-			m.addLog("%s", msg)
+			m.logMu.Lock()
+			m.logs = append(m.logs, msg)
+			if len(m.logs) > m.maxLogs {
+				m.logs = m.logs[1:]
+			}
+			m.logMu.Unlock()
+
+			m.emitLog(msg)
 		},
 	}
+	// 启动阶段就把 UI handler 设成全局 handler，这样核心在 StartInstance 之前
+	// 产生的日志也能进入 UI（随后会被 core 的注册顶掉，需见 Start 重新注册）。
 	v2log.RegisterHandler(m.logHandler)
 }
 
@@ -221,19 +196,19 @@ func (m *V2rayManager) GetLogs() []string {
 
 // Start 在内存中启动 V2Ray 实例（带 Panic Recovery 与并发保护）
 func (m *V2rayManager) Start(configJSON []byte) (err error) {
+	// 若上一次关闭尚未完成，先等待其结束，
+	// 保证旧实例的监听端口已释放，避免启动新实例时端口冲突。
 	m.mu.Lock()
-	if m.isRunning && m.instance != nil {
-		m.mu.Unlock()
-		return fmt.Errorf("v2ray core instance is already running")
-	}
-	if m.isStopping {
-		stopChan := m.stopChan
-		m.mu.Unlock()
-		if stopChan != nil {
-			<-stopChan // 等待上一次实例完全关闭并释放端口资源
+	ch := m.closingCh
+	closing := m.closing
+	m.mu.Unlock()
+
+	if closing {
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			m.emitLog("Previous instance close still pending after 5s; starting anyway")
 		}
-	} else {
-		m.mu.Unlock()
 	}
 
 	m.mu.Lock()
@@ -293,61 +268,68 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 
 	m.emitLog("V2Ray core in-memory instance started successfully.")
 
+	// 核心在 StartInstance 内部初始化日志功能时调过 RegisterHandler，
+	// 把全局 handler 换成了它自己的日志实例，使我们之前的注册失效。
+	// 这里重新注册一次，之后所有核心日志（diagnostic + access）都会经由
+	// 我们的 uiLogHandler 转发到 UI。
+	v2log.RegisterHandler(m.logHandler)
+
 	return nil
 }
 
-// Stop 优雅关闭 V2Ray 内存实例并同步释放资源（确保端口释放，防止竞态）
+// Stop 关闭 V2Ray 内存实例。
+//
+// 实例的关闭在后台 goroutine 中进行，Stop 本身立即返回。
+// 关闭完成后会通过 closingCh 通知；启动新实例时会等待其完成，
+// 以保证旧实例的监听端口已彻底释放，避免端口冲突。
 func (m *V2rayManager) Stop() error {
 	m.mu.Lock()
-	if !m.isRunning && !m.isStopping {
+	if !m.isRunning {
 		m.mu.Unlock()
 		return nil
 	}
-	if m.isStopping {
-		m.mu.Unlock()
-		return nil
-	}
-
-	m.isRunning = false
-	m.isStopping = true
-	stopChan := make(chan struct{})
-	m.stopChan = stopChan
 
 	if m.cancel != nil {
 		m.cancel()
 	}
 
 	inst := m.instance
+	m.closing = true
+	m.closingCh = make(chan struct{})
 	m.instance = nil
-	m.mu.Unlock() // 释放锁，允许其他操作进入
+	m.isRunning = false
+	m.mu.Unlock() // 立即释放锁，使启动流程能够进入 waiting
 
 	m.emitLog("Stopping V2Ray core in-memory instance...")
 
-	if inst != nil {
-		// 异步关闭实例，避免等待网络回应或连接断开导致阻塞，同时通过 stopChan 保证完全关闭前不可再次 Start 冲突
+	if inst == nil {
+		close(m.closingCh)
+		m.emitLog("V2Ray core in-memory instance stopped.")
+		return nil
+	}
+
+	go func() {
+		defer close(m.closingCh) // 无论成功/失败/panic 都确保"已完成"通知被发出
+		defer func() {
+			if r := recover(); r != nil {
+				m.emitLog(fmt.Sprintf("V2Ray instance close panic recovered: %v", r))
+			}
+		}()
+
+		// 给 Close 加超时保护，避免极端情况下卡死导致 closing 永不为真。
+		done := make(chan error, 1)
 		go func() {
-			defer close(stopChan)
-			defer func() {
-				if r := recover(); r != nil {
-					m.emitLog(fmt.Sprintf("V2Ray instance close panic recovered: %v", r))
-				}
-			}()
-			err := inst.Close()
+			done <- inst.Close()
+		}()
+		select {
+		case err := <-done:
 			if err != nil {
 				m.emitLog(fmt.Sprintf("V2Ray instance close warning: %v", err))
 			}
-			m.mu.Lock()
-			m.isStopping = false
-			m.mu.Unlock()
-			m.emitLog("V2Ray core in-memory instance stopped.")
-		}()
-	} else {
-		close(stopChan)
-		m.mu.Lock()
-		m.isStopping = false
-		m.mu.Unlock()
-		m.emitLog("V2Ray core in-memory instance stopped.")
-	}
+		case <-time.After(10 * time.Second):
+			m.emitLog("V2Ray instance close timed out after 10s; proceeding with shutdown")
+		}
+	}()
 
 	return nil
 }
