@@ -45,6 +45,17 @@ func SetupDashboard(w fyne.Window) {
 
 	logChan := make(chan string, 2000)
 
+	clearLogQueue := func() {
+		for {
+			select {
+			case <-logChan:
+			default:
+				goto DRAINED
+			}
+		}
+	DRAINED:
+	}
+
 	// Background worker for log throttling & batching (300ms ticker)
 	go func() {
 		ticker := time.NewTicker(300 * time.Millisecond)
@@ -79,14 +90,18 @@ func SetupDashboard(w fyne.Window) {
 		}
 	}()
 
+	var v2rayMgr *core.V2rayManager
 	onLog := func(msg string) {
+		if v2rayMgr != nil && !v2rayMgr.IsRunning() {
+			return
+		}
 		select {
 		case logChan <- msg:
 		default:
 		}
 	}
 
-	v2rayMgr := core.GetManager(onLog)
+	v2rayMgr = core.GetManager(onLog)
 	vpnMgr := service.NewVPNServiceManager(cfg.TunIP, "10.0.0.1", onLog)
 
 	statusLabel := widget.NewLabel("状态: 已停止")
@@ -156,6 +171,8 @@ func SetupDashboard(w fyne.Window) {
 					statusLabel.SetText("状态: V2Ray 停止中...")
 				})
 				_ = v2rayMgr.Stop()
+				clearLogQueue()
+				v2rayMgr.ClearLogs()
 				log.Printf("[Dashboard] V2Ray core stopped.")
 			}
 		}()
@@ -229,6 +246,7 @@ func SetupDashboard(w fyne.Window) {
 	})
 
 	clearBtn := widget.NewButton("清除日志", func() {
+		clearLogQueue()
 		logLines = nil
 		logText = ""
 		logLabel.SetText("")

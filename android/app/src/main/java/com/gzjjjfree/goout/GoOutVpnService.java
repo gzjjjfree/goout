@@ -26,7 +26,7 @@ public class GoOutVpnService extends VpnService {
     private static final Application.ActivityLifecycleCallbacks RESUME_CALLBACK =
             new Application.ActivityLifecycleCallbacks() {
         @Override public void onActivityCreated(Activity a, Bundle s) {}
-        @Override public void onActivityStarted(Activity a, Bundle s) {}
+        @Override public void onActivityStarted(Activity a) {}
         @Override public void onActivityResumed(Activity a) {
             if (!waitingForPermission) return;
             waitingForPermission = false;
