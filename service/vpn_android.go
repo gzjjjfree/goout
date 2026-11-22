@@ -183,12 +183,12 @@ func triggerAndroidVpnService(socksAddr string) error {
 		if !ok {
 			return fmt.Errorf("not a driver.AndroidContext (got %T)", ctx)
 		}
-		if ac.Env == nil || ac.Ctx == nil {
-			return fmt.Errorf("driver.AndroidContext has nil Env or Ctx")
+		if ac.Env == 0 || ac.Ctx == 0 {
+			return fmt.Errorf("driver.AndroidContext has zero Env or Ctx")
 		}
 		cAddr := C.CString(socksAddr)
 		defer C.free(unsafe.Pointer(cAddr))
-		C.androidStartVpnService(C.uintptr_t(uintptr(ac.Env)), C.uintptr_t(uintptr(ac.Ctx)), cAddr)
+		C.androidStartVpnService(C.uintptr_t(ac.Env), C.uintptr_t(ac.Ctx), cAddr)
 		return nil
 	})
 	if err != nil {
@@ -204,10 +204,10 @@ func triggerAndroidStopVpnService() {
 		if !ok {
 			return nil
 		}
-		if ac.Env == nil || ac.Ctx == nil {
+		if ac.Env == 0 || ac.Ctx == 0 {
 			return nil
 		}
-		C.androidStopVpnService(C.uintptr_t(uintptr(ac.Env)), C.uintptr_t(uintptr(ac.Ctx)))
+		C.androidStopVpnService(C.uintptr_t(ac.Env), C.uintptr_t(ac.Ctx))
 		return nil
 	})
 	if err != nil {
