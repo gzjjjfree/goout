@@ -1,16 +1,5 @@
 [Details]
-name = "GoOut"
-icon = "Icon.png"
-bundle = "com.gzjjjfree.goout"
-version = "1.1.36"
-build = 1
-
-[Android]
-package = "com.gzjjjfree.goout"
-app-id = "com.gzjjjfree.goout"
-permissions = [
-    "android.permission.INTERNET",
-    "android.permission.ACCESS_NETWORK_STATE",
-    "android.permission.FOREGROUND_SERVICE",
-    "android.permission.BIND_VPN_SERVICE"
-]
+  Icon = "Icon.png"
+  Name = "GoOut"
+  Version = "1.1.36"
+  Build = 3

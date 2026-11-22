@@ -25,4 +25,5 @@ v5-result-linux
 ./core/geosite.dat
 ./core/result.json
 v5-result-linux
-./goout.json
+goout.json
+work/

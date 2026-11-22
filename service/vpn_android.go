@@ -45,7 +45,7 @@ static void androidStartVpnService(uintptr_t envPtr, uintptr_t activityPtr, cons
         (*env)->ExceptionClear(env);
         return;
     }
-    const char *addr = socksAddr ? socksAddr : "127.0.0.1:10808";
+    const char *addr = socksAddr ? socksAddr : "127.0.0.1:10908";
     jstring jaddr = (*env)->NewStringUTF(env, addr);
     (*env)->CallStaticVoidMethod(env, cls, mid, activity, jaddr);
     if ((*env)->ExceptionCheck(env)) {
@@ -168,7 +168,7 @@ func updateAndroidFD(fd int) {
 
 	socksToUse := socks
 	if socksToUse == "" {
-		socksToUse = "127.0.0.1:10808"
+		socksToUse = "127.0.0.1:10908"
 	}
 
 	v.mu.Lock()
@@ -178,15 +178,18 @@ func updateAndroidFD(fd int) {
 	log.Printf("[Android-VPN] Real TUN FD=%d received, starting tun2socks (socks=%s)", fd, socksToUse)
 
 	// 用真实 fd 重建 engine。
-	jni.StopTun2Socks()
-	if err := jni.StartTun2Socks(fd, v.tunIP, v.gateway, socksToUse); err != nil {
-		log.Printf("[Android-VPN] Failed to start tun2socks with real FD=%d: %v", fd, err)
-		v.mu.Lock()
-		v.active = false
-		v.mu.Unlock()
-		return
-	}
-	log.Printf("[Android-VPN] tun2socks running on real FD=%d", fd)
+	// 关键：放到后台 goroutine，避免阻塞 service/UI 主线程
+	go func() {
+		jni.StopTun2Socks()
+		if err := jni.StartTun2Socks(fd, v.tunIP, v.gateway, socksToUse); err != nil {
+			log.Printf("[Android-VPN] Failed to start tun2socks with real FD=%d: %v", fd, err)
+			v.mu.Lock()
+			v.active = false
+			v.mu.Unlock()
+			return
+		}
+		log.Printf("[Android-VPN] tun2socks running on real FD=%d", fd)
+	}()
 }
 
 // StopVPN 停止 tun2socks，并让 Android 宿主回收 TUN 接口。

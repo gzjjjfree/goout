@@ -47,15 +47,40 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Install Fyne CLI
-        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+      - name: Cache Go Modules, Build Cache, and Fyne CLI
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/go/bin
+          key: ${{ runner.os }}-go-fyne-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-fyne-
 
-      - name: Build Android (Native Mode)
+      - name: Cache Apktool and Bundletool JARs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/android-build-tools
+          key: android-build-jars-apktool-2.9.3-bundletool-1.17.0
+
+      - name: Install Fyne CLI
+        run: |
+          export PATH="$HOME/go/bin:$(go env GOPATH)/bin:$PATH"
+          if ! command -v fyne >/dev/null 2>&1; then
+            go install fyne.io/fyne/v2/cmd/fyne@latest
+          fi
+
+      - name: Build Android (Native Mode & Inject VpnService)
         env:
           K_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           K_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           K_ALIAS: "goout-alias"
         run: |
+          set -euo pipefail
+          export PATH="$HOME/go/bin:$(go env GOPATH)/bin:$PATH"
+
+          # 1. 解析与写入版本号及 Build ID
           RAW_VERSION="${{ github.event.inputs.version }}"
           if [ -z "$RAW_VERSION" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
             RAW_VERSION="${GITHUB_REF#refs/tags/}"
@@ -77,37 +102,200 @@ jobs:
           fi
           python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); c=re.sub(r"^version\s*=.*", f"version = \"{sys.argv[1]}\"", c, flags=re.M); c=re.sub(r"^build\s*=.*", f"build = {sys.argv[2]}", c, flags=re.M); open(f,"w").write(c)' "$CLEAN_VERSION" "$BUILD_ID"
 
+          # 2. 准备缓存工具与 Android SDK 路径
+          ROOT_DIR="$(pwd)"
+          WORK_DIR="$ROOT_DIR/work"
+          CACHE_DIR="$HOME/.cache/android-build-tools"
+          mkdir -p "$CACHE_DIR" "$WORK_DIR" "$WORK_DIR/compiled"
+
           BT_VERSION="1.17.0"
-          curl -L -o bundletool.jar https://github.com/google/bundletool/releases/download/${BT_VERSION}/bundletool-all-${BT_VERSION}.jar
-          printf "#!/bin/bash\njava -jar $(pwd)/bundletool.jar \"\$@\"" > bundletool
-          chmod +x bundletool
-          export PATH=$PATH:$(pwd)
+          BUNDLETOOL_CACHE="$CACHE_DIR/bundletool-all-${BT_VERSION}.jar"
+          if [ ! -s "$BUNDLETOOL_CACHE" ]; then
+            curl -fL --retry 3 --retry-delay 2 \
+              -o "${BUNDLETOOL_CACHE}.tmp" \
+              "https://github.com/google/bundletool/releases/download/${BT_VERSION}/bundletool-all-${BT_VERSION}.jar"
+            unzip -t "${BUNDLETOOL_CACHE}.tmp" >/dev/null
+            mv "${BUNDLETOOL_CACHE}.tmp" "$BUNDLETOOL_CACHE"
+          fi
+          cp "$BUNDLETOOL_CACHE" "$ROOT_DIR/bundletool.jar"
+          printf "#!/bin/bash\njava -jar \"%s/bundletool.jar\" \"\$@\"\n" "$ROOT_DIR" > "$ROOT_DIR/bundletool"
+          chmod +x "$ROOT_DIR/bundletool"
 
-          echo "$K_BASE64" | base64 -d > release.keystore
-          export ANDROID_HOME=$ANDROID_SDK_ROOT
-          export ANDROID_NDK_HOME=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
+          APKTOOL_VERSION="2.9.3"
+          APKTOOL_CACHE="$CACHE_DIR/apktool_${APKTOOL_VERSION}.jar"
+          APKTOOL_JAR="$WORK_DIR/apktool.jar"
+          if [ ! -s "$APKTOOL_CACHE" ]; then
+            curl -fL --retry 3 --retry-delay 2 \
+              -o "${APKTOOL_CACHE}.tmp" \
+              "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar"
+            unzip -t "${APKTOOL_CACHE}.tmp" >/dev/null
+            mv "${APKTOOL_CACHE}.tmp" "$APKTOOL_CACHE"
+          fi
+          cp "$APKTOOL_CACHE" "$APKTOOL_JAR"
 
+          echo "$K_BASE64" | base64 -d > "$ROOT_DIR/release.keystore"
+          export ANDROID_HOME="${ANDROID_SDK_ROOT:-$HOME/android-sdk}"
+          export ANDROID_NDK_HOME=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | tail -1 || true)
+
+          BUILD_TOOLS_DIR=$(ls -d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -1)
+          if [ -f "$ANDROID_HOME/platforms/android-34/android.jar" ]; then
+            ANDROID_PLATFORM="$ANDROID_HOME/platforms/android-34/android.jar"
+          else
+            ANDROID_PLATFORM=$(ls "$ANDROID_HOME"/platforms/*/android.jar 2>/dev/null | sort -V | tail -1)
+          fi
+
+          D8="$BUILD_TOOLS_DIR/d8"
+          ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+          export PATH="$BUILD_TOOLS_DIR:$ROOT_DIR:$PATH"
+
+          # 3. 构建 AAB 并提取通用 APK 作为基础包
           fyne release -os android/arm64 \
             -appID com.gzjjjfree.goout \
             -icon Icon.png \
-            -keyStore release.keystore \
+            -keyStore "$ROOT_DIR/release.keystore" \
             -keyStorePass "$K_PASS" \
             -keyPass "$K_PASS" \
             -appVersion "$CLEAN_VERSION" \
             -appBuild "$BUILD_ID" \
             -keyName "$K_ALIAS" \
             -name GoOut
-          ./bundletool build-apks --bundle=GoOut.aab --output=GoOut.apks --mode=universal --ks=release.keystore --ks-pass=pass:"$K_PASS" --ks-key-alias="$K_ALIAS" --key-pass=pass:"$K_PASS"
-          unzip -p GoOut.apks universal.apk > GoOut_Native.apk
-          mv GoOut.aab GoOut_Native.aab
+
+          bundletool build-apks \
+            --bundle="$ROOT_DIR/GoOut.aab" \
+            --output="$ROOT_DIR/GoOut.apks" \
+            --mode=universal \
+            --ks="$ROOT_DIR/release.keystore" \
+            --ks-pass=pass:"$K_PASS" \
+            --ks-key-alias="$K_ALIAS" \
+            --key-pass=pass:"$K_PASS"
+
+          APK_SRC="$ROOT_DIR/goout.apk"
+          unzip -p "$ROOT_DIR/GoOut.apks" universal.apk > "$APK_SRC"
+          mv "$ROOT_DIR/GoOut.aab" "$ROOT_DIR/GoOut_Native.aab"
+
+          # 4. 编译 GoOutVpnService.java 并与 classes.dex 合并
+          JAVA_SRC="$ROOT_DIR/android/app/src/main/java/com/gzjjjfree/goout/GoOutVpnService.java"
+          COMPILED_DIR="$WORK_DIR/compiled"
+          CLASSES_DEX="$WORK_DIR/classes.dex"
+          PKGBASE="$WORK_DIR/pkgbase"
+          OUTDEX="$WORK_DIR/outdex"
+          MERGED_DEX="$WORK_DIR/merged.dex"
+
+          javac -cp "$ANDROID_PLATFORM" -d "$COMPILED_DIR" "$JAVA_SRC"
+          ls -l "$COMPILED_DIR/com/gzjjjfree/goout/GoOutVpnService.class"
+
+          unzip -p "$APK_SRC" classes.dex > "$CLASSES_DEX"
+          rm -rf "$PKGBASE" "$OUTDEX"
+          mkdir -p "$PKGBASE/com/gzjjjfree/goout" "$OUTDEX"
+          cp "$COMPILED_DIR/com/gzjjjfree/goout/GoOutVpnService.class" "$PKGBASE/com/gzjjjfree/goout/"
+
+          (
+            cd "$PKGBASE"
+            "$D8" --output "$OUTDEX" --lib "$ANDROID_PLATFORM" \
+                  "$CLASSES_DEX" \
+                  "com/gzjjjfree/goout/GoOutVpnService.class"
+          )
+
+          cp "$OUTDEX/classes.dex" "$MERGED_DEX"
+          strings "$MERGED_DEX" | grep -q "GoOutVpnService"
+
+          # 5. 解码 APK、注入 VpnService 清单声明并替换 classes.dex
+          DECODED_DIR="$WORK_DIR/decoded"
+          BUILT_APK="$WORK_DIR/built.apk"
+          ALIGNED_APK="$WORK_DIR/built-aligned.apk"
+          FINAL_APK="$WORK_DIR/built-final.apk"
+          VERIFY_DIR="$WORK_DIR/verify_built"
+
+          rm -rf "$DECODED_DIR"
+          java -jar "$APKTOOL_JAR" d -f "$APK_SRC" -o "$DECODED_DIR"
+          ls "$DECODED_DIR/AndroidManifest.xml"
+
+          MANIFEST_PATH="$DECODED_DIR/AndroidManifest.xml" SERVICE_NAME=".GoOutVpnService" python3 - <<'PY'
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          manifest_path = os.environ["MANIFEST_PATH"]
+          service_name = os.environ["SERVICE_NAME"]
+
+          if not os.path.isfile(manifest_path):
+              print(f"错误：找不到清单文件 {manifest_path}", file=sys.stderr)
+              sys.exit(1)
+
+          ANDROID_NS = "http://schemas.android.com/apk/res/android"
+          ET.register_namespace("android", ANDROID_NS)
+
+          tree = ET.parse(manifest_path)
+          root = tree.getroot()
+          app_elem = root.find("application")
+
+          if app_elem is None:
+              print("错误：AndroidManifest.xml 中未找到 <application> 节点", file=sys.stderr)
+              sys.exit(1)
+
+          attr_name = f"{{{ANDROID_NS}}}name"
+          short_name = service_name.lstrip(".")
+
+          for svc_elem in app_elem.findall("service"):
+              existing = svc_elem.attrib.get(attr_name, "")
+              if existing == service_name or existing.endswith("." + short_name):
+                  print("manifest 已有 service，跳过")
+                  sys.exit(0)
+
+          svc_elem = ET.SubElement(
+              app_elem,
+              "service",
+              {
+                  f"{{{ANDROID_NS}}}name": service_name,
+                  f"{{{ANDROID_NS}}}permission": "android.permission.BIND_VPN_SERVICE",
+                  f"{{{ANDROID_NS}}}exported": "true",
+              },
+          )
+          intent_filter = ET.SubElement(svc_elem, "intent-filter")
+          ET.SubElement(intent_filter, "action", {f"{{{ANDROID_NS}}}name": "android.net.VpnService"})
+
+          if hasattr(ET, "indent"):
+              ET.indent(tree, space="    ")
+
+          tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
+          print("manifest 已注入 service")
+          PY
+
+          cp "$MERGED_DEX" "$DECODED_DIR/classes.dex"
+          ls -l "$DECODED_DIR/classes.dex"
+
+          # 6. 回编、验证清单、对齐与签名
+          java -jar "$APKTOOL_JAR" b "$DECODED_DIR" -o "$BUILT_APK"
+
+          rm -rf "$VERIFY_DIR"
+          java -jar "$APKTOOL_JAR" d -f -s "$BUILT_APK" -o "$VERIFY_DIR"
+          grep -n -C 5 "GoOutVpnService" "$VERIFY_DIR/AndroidManifest.xml"
+
+          rm -f "$ALIGNED_APK" "$FINAL_APK"
+          "$ZIPALIGN" -f -v 4 "$BUILT_APK" "$ALIGNED_APK"
+
+          "$APKSIGNER" sign \
+            --ks "$ROOT_DIR/release.keystore" \
+            --ks-pass pass:"$K_PASS" \
+            --ks-key-alias "$K_ALIAS" \
+            --key-pass pass:"$K_PASS" \
+            --out "$FINAL_APK" \
+            "$ALIGNED_APK"
+
+          "$APKSIGNER" verify --verbose "$FINAL_APK"
+
+          # 7. 输出最终 APK 并清理临时文件
+          cp "$FINAL_APK" "$ROOT_DIR/GoOut_Native.apk"
+          rm -rf "$WORK_DIR" "$APK_SRC" "$ROOT_DIR/GoOut.apks" "$ROOT_DIR/release.keystore" "$ROOT_DIR/bundletool" "$ROOT_DIR/bundletool.jar"
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
           path: |
-            *.apk
-            *.aab
+            GoOut_Native.apk
+            GoOut_Native.aab
 
   build-macos:
     if: ${{ github.event_name == 'push' || github.event.inputs.target_os == 'all' || github.event.inputs.target_os == 'macos' }}
@@ -123,11 +311,27 @@ jobs:
         with:
           go-version: "1.26.4"
 
+      - name: Cache Go Modules, Build Cache, and Fyne CLI
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/go/bin
+          key: ${{ runner.os }}-go-fyne-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-fyne-
+
       - name: Install Fyne CLI
-        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+        run: |
+          export PATH="$HOME/go/bin:$(go env GOPATH)/bin:$PATH"
+          if ! command -v fyne >/dev/null 2>&1; then
+            go install fyne.io/fyne/v2/cmd/fyne@latest
+          fi
 
       - name: Build macOS (ARM64)
         run: |
+          export PATH="$HOME/go/bin:$(go env GOPATH)/bin:$PATH"
           if [ -n "${{ github.event.inputs.version }}" ]; then
             RAW_VERSION="${{ github.event.inputs.version }}"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
@@ -163,12 +367,29 @@ jobs:
         with:
           go-version: "1.26.4"
 
+      - name: Cache Go Modules, Build Cache, and Fyne CLI
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/go/bin
+          key: ${{ runner.os }}-go-fyne-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-fyne-
+
       - name: Install Fyne CLI
-        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+        shell: bash
+        run: |
+          export PATH="$HOME/go/bin:$(go env GOPATH)/bin:$PATH"
+          if ! command -v fyne >/dev/null 2>&1; then
+            go install fyne.io/fyne/v2/cmd/fyne@latest
+          fi
 
       - name: Build Windows (Package Mode)
         shell: bash
         run: |
+          export PATH="$HOME/go/bin:$(go env GOPATH)/bin:$PATH"
           if [ -n "${{ github.event.inputs.version }}" ]; then
             RAW_VERSION="${{ github.event.inputs.version }}"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
@@ -203,6 +424,24 @@ jobs:
         with:
           go-version: "1.26.4"
 
+      - name: Cache Go Modules, Build Cache, and Fyne CLI
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/go/bin
+          key: ${{ runner.os }}-go-fyne-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-fyne-
+
+      - name: Install Fyne CLI
+        run: |
+          export PATH="$HOME/go/bin:$(go env GOPATH)/bin:$PATH"
+          if ! command -v fyne >/dev/null 2>&1; then
+            go install fyne.io/fyne/v2/cmd/fyne@latest
+          fi
+
       - name: Install Linux Graphics Dependencies
         run: |
           sudo apt-get update
@@ -210,6 +449,7 @@ jobs:
 
       - name: Build Linux Binary
         run: |
+          export PATH="$HOME/go/bin:$(go env GOPATH)/bin:$PATH"
           if [ -n "${{ github.event.inputs.version }}" ]; then
             RAW_VERSION="${{ github.event.inputs.version }}"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
@@ -231,7 +471,7 @@ jobs:
 
   create-release:
     needs: [build-android, build-macos, build-windows, build-linux]
-    if: always() # 确保即使部分任务被跳过，release 也能根据成功的产物继续执行
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -242,7 +482,6 @@ jobs:
       - name: Organize and Rename Assets
         run: |
           mkdir -p release_assets
-          # 使用 || true 防止某个平台没构建导致 cp 报错中断
           cp android-apk/GoOut_Native.apk release_assets/GoOut.apk 2>/dev/null || true
           cp android-apk/GoOut_Native.aab release_assets/GoOut.aab 2>/dev/null || true
           cp macos-app/*.zip release_assets/ 2>/dev/null || true
