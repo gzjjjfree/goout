@@ -185,13 +185,13 @@ jobs:
           unzip -p "$APK_SRC" classes.dex > "$CLASSES_DEX"
           rm -rf "$PKGBASE" "$OUTDEX"
           mkdir -p "$PKGBASE/com/gzjjjfree/goout" "$OUTDEX"
-          cp "$COMPILED_DIR/com/gzjjjfree/goout/GoOutVpnService.class" "$PKGBASE/com/gzjjjfree/goout/"
+          cp "$COMPILED_DIR/com/gzjjjfree/goout/GoOutVpnService"*".class" "$PKGBASE/com/gzjjjfree/goout/"
 
           (
             cd "$PKGBASE"
             "$D8" --output "$OUTDEX" --lib "$ANDROID_PLATFORM" \
                   "$CLASSES_DEX" \
-                  "com/gzjjjfree/goout/GoOutVpnService.class"
+                  com/gzjjjfree/goout/GoOutVpnService*.class
           )
 
           cp "$OUTDEX/classes.dex" "$MERGED_DEX"

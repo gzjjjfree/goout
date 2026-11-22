@@ -989,26 +989,22 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 		} else {
 			marshalErr := fmt.Errorf("failed to marshal config: %w", err)
 			fyne.Do(func() {
-				errDlg := dialog.NewError(marshalErr, w)
-				errDlg.SetOnClosed(func() {
-					configTextEntry := widget.NewMultiLineEntry()
-					configTextEntry.SetText(fmt.Sprintf("%v", rawCfg))
-					configTextEntry.Wrapping = fyne.TextWrapWord
+				configTextEntry := widget.NewMultiLineEntry()
+				configTextEntry.SetText(fmt.Sprintf("%v", rawCfg))
+				configTextEntry.Wrapping = fyne.TextWrapWord
 
-					scroll := container.NewVScroll(configTextEntry)
-					scroll.SetMinSize(fyne.NewSize(500, 350))
+				scroll := container.NewVScroll(configTextEntry)
+				scroll.SetMinSize(fyne.NewSize(500, 350))
 
-					infoBox := container.NewVBox(
-						widget.NewLabelWithStyle("配置保存失败（JSON 序列化失败）", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-						widget.NewLabel("Config 全文如下："),
-						scroll,
-					)
+				infoBox := container.NewVBox(
+					widget.NewLabelWithStyle(fmt.Sprintf("配置保存失败 (JSON 序列化失败: %v)", marshalErr), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+					widget.NewLabel("Config 全文如下："),
+					scroll,
+				)
 
-					dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
-					dInfo.Resize(fyne.NewSize(600, 500))
-					dInfo.Show()
-				})
-				errDlg.Show()
+				dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
+				dInfo.Resize(fyne.NewSize(600, 500))
+				dInfo.Show()
 			})
 			return
 		}
@@ -1043,27 +1039,22 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			mgr := core.GetManager(nil)
 			if checkErr := mgr.CheckConfig(outBytes); checkErr != nil {
 				fyne.Do(func() {
-					checkErrWrapped := fmt.Errorf("V2Ray 核心配置检查失败: %w", checkErr)
-					errDlg := dialog.NewError(checkErrWrapped, w)
-					errDlg.SetOnClosed(func() {
-						configTextEntry := widget.NewMultiLineEntry()
-						configTextEntry.SetText(string(outBytes))
-						configTextEntry.Wrapping = fyne.TextWrapWord
+					configTextEntry := widget.NewMultiLineEntry()
+					configTextEntry.SetText(string(outBytes))
+					configTextEntry.Wrapping = fyne.TextWrapWord
 
-						scroll := container.NewVScroll(configTextEntry)
-						scroll.SetMinSize(fyne.NewSize(500, 350))
+					scroll := container.NewVScroll(configTextEntry)
+					scroll.SetMinSize(fyne.NewSize(500, 350))
 
-						infoBox := container.NewVBox(
-							widget.NewLabelWithStyle("配置保存失败，V2Ray 核心检查未通过！", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-							widget.NewLabel("Config 全文如下："),
-							scroll,
-						)
+					infoBox := container.NewVBox(
+						widget.NewLabelWithStyle(fmt.Sprintf("配置保存失败，V2Ray 核心检查未通过: %v", checkErr), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+						widget.NewLabel("Config 全文如下："),
+						scroll,
+					)
 
-						dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
-						dInfo.Resize(fyne.NewSize(600, 500))
-						dInfo.Show()
-					})
-					errDlg.Show()
+					dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
+					dInfo.Resize(fyne.NewSize(600, 500))
+					dInfo.Show()
 				})
 				return
 			}
