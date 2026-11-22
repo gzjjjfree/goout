@@ -47,16 +47,13 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Cache Go Modules, Build Cache, and Fyne CLI
+      - name: Cache Fyne CLI Binary
         uses: actions/cache@v4
         with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-            ~/go/bin
-          key: ${{ runner.os }}-go-fyne-${{ hashFiles('**/go.sum') }}
+          path: ~/go/bin
+          key: ${{ runner.os }}-fyne-cli-v2
           restore-keys: |
-            ${{ runner.os }}-go-fyne-
+            ${{ runner.os }}-fyne-cli-
 
       - name: Cache Apktool and Bundletool JARs
         uses: actions/cache@v4
@@ -311,16 +308,13 @@ jobs:
         with:
           go-version: "1.26.4"
 
-      - name: Cache Go Modules, Build Cache, and Fyne CLI
+      - name: Cache Fyne CLI Binary
         uses: actions/cache@v4
         with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-            ~/go/bin
-          key: ${{ runner.os }}-go-fyne-${{ hashFiles('**/go.sum') }}
+          path: ~/go/bin
+          key: ${{ runner.os }}-fyne-cli-v2
           restore-keys: |
-            ${{ runner.os }}-go-fyne-
+            ${{ runner.os }}-fyne-cli-
 
       - name: Install Fyne CLI
         run: |
@@ -367,16 +361,13 @@ jobs:
         with:
           go-version: "1.26.4"
 
-      - name: Cache Go Modules, Build Cache, and Fyne CLI
+      - name: Cache Fyne CLI Binary
         uses: actions/cache@v4
         with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-            ~/go/bin
-          key: ${{ runner.os }}-go-fyne-${{ hashFiles('**/go.sum') }}
+          path: ~/go/bin
+          key: ${{ runner.os }}-fyne-cli-v2
           restore-keys: |
-            ${{ runner.os }}-go-fyne-
+            ${{ runner.os }}-fyne-cli-
 
       - name: Install Fyne CLI
         shell: bash
@@ -424,16 +415,13 @@ jobs:
         with:
           go-version: "1.26.4"
 
-      - name: Cache Go Modules, Build Cache, and Fyne CLI
+      - name: Cache Fyne CLI Binary
         uses: actions/cache@v4
         with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-            ~/go/bin
-          key: ${{ runner.os }}-go-fyne-${{ hashFiles('**/go.sum') }}
+          path: ~/go/bin
+          key: ${{ runner.os }}-fyne-cli-v2
           restore-keys: |
-            ${{ runner.os }}-go-fyne-
+            ${{ runner.os }}-fyne-cli-
 
       - name: Install Fyne CLI
         run: |
