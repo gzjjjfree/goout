@@ -10,7 +10,7 @@ bundletool*
 AGENTS.md
 ARCH_NOTES.md
 .roo/
-goout
+/goout
 todolist.md
 libv2ray.so
 venv
