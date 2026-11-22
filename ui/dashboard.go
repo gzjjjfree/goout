@@ -284,8 +284,11 @@ func showConfigCheckResultDialog(w fyne.Window, statusTitle string, configConten
 	scroll := container.NewVScroll(configTextEntry)
 	scroll.SetMinSize(fyne.NewSize(500, 350))
 
+	statusLabel := widget.NewLabelWithStyle(statusTitle, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	statusLabel.Wrapping = fyne.TextWrapWord
+
 	infoBox := container.NewVBox(
-		widget.NewLabelWithStyle(statusTitle, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		statusLabel,
 		widget.NewLabel("Config 全文如下："),
 		scroll,
 	)

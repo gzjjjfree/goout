@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 	"unsafe"
 
 	"fyne.io/fyne/v2/driver"
@@ -21,17 +22,16 @@ import (
 #include <android/log.h>
 #include <stdlib.h>
 
-// 注意：static 是关键。
-// cgo 在 -buildmode=c-shared 模式下会把内联 C 代码的符号以全局链接属性发出，
-// 若为普通全局函数，同一份符号可能被塞进两个 .o，链接时即 duplicate symbol。
-// 改为 static 后每个文件各持一份局部符号，cgo 生成的 wrapper 在同一翻译单元内即可调用。
+#define GOOUT_LOG_TAG "GoOutVpnService"
 
 static jclass goout_findVpnServiceClass(JNIEnv *env, jobject activity) {
     if (!activity) {
+        __android_log_print(ANDROID_LOG_WARN, GOOUT_LOG_TAG, "goout_findVpnServiceClass: activity is null, using FindClass");
         return (*env)->FindClass(env, "com/gzjjjfree/goout/GoOutVpnService");
     }
     jclass activityClass = (*env)->GetObjectClass(env, activity);
     if (!activityClass) {
+        __android_log_print(ANDROID_LOG_WARN, GOOUT_LOG_TAG, "GetObjectClass failed, fallback to FindClass");
         return (*env)->FindClass(env, "com/gzjjjfree/goout/GoOutVpnService");
     }
     jmethodID getClassLoader = (*env)->GetMethodID(env, activityClass, "getClassLoader", "()Ljava/lang/ClassLoader;");
@@ -58,6 +58,12 @@ static jclass goout_findVpnServiceClass(JNIEnv *env, jobject activity) {
     jclass cls = (jclass)(*env)->CallObjectMethod(env, classLoader, loadClass, className);
     (*env)->DeleteLocalRef(env, className);
     (*env)->DeleteLocalRef(env, classLoader);
+    if ((*env)->ExceptionCheck(env)) {
+        __android_log_print(ANDROID_LOG_ERROR, GOOUT_LOG_TAG, "Exception while loading GoOutVpnService via ClassLoader");
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
     return cls;
 }
 
@@ -65,19 +71,24 @@ static void androidStartVpnService(uintptr_t envPtr, uintptr_t activityPtr, cons
     JNIEnv *env = (JNIEnv *)envPtr;
     jobject activity = (jobject)activityPtr;
     if (!env || !activity) {
-        __android_log_print(ANDROID_LOG_ERROR, "GoOutVpn", "androidStartVpnService: invalid env/activity");
+        __android_log_print(ANDROID_LOG_ERROR, GOOUT_LOG_TAG, "androidStartVpnService: invalid env=%p or activity=%p", env, activity);
         return;
     }
+    __android_log_print(ANDROID_LOG_INFO, GOOUT_LOG_TAG, "androidStartVpnService: env=%p, activity=%p, socks=%s",
+                        env, activity, socksAddr ? socksAddr : "");
     jclass cls = goout_findVpnServiceClass(env, activity);
     if (!cls) {
-        __android_log_print(ANDROID_LOG_ERROR, "GoOutVpn", "FindClass/LoadClass GoOutVpnService failed");
+        __android_log_print(ANDROID_LOG_ERROR, GOOUT_LOG_TAG, "FindClass/LoadClass GoOutVpnService failed");
         return;
     }
     jmethodID mid = (*env)->GetStaticMethodID(env, cls, "startVpnService",
                                               "(Landroid/content/Context;Ljava/lang/String;)V");
     if (!mid) {
-        __android_log_print(ANDROID_LOG_ERROR, "GoOutVpn", "GetStaticMethodID startVpnService failed");
-        (*env)->ExceptionClear(env);
+        __android_log_print(ANDROID_LOG_ERROR, GOOUT_LOG_TAG, "GetStaticMethodID startVpnService failed");
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionDescribe(env);
+            (*env)->ExceptionClear(env);
+        }
         (*env)->DeleteLocalRef(env, cls);
         return;
     }
@@ -85,9 +96,11 @@ static void androidStartVpnService(uintptr_t envPtr, uintptr_t activityPtr, cons
     jstring jaddr = (*env)->NewStringUTF(env, addr);
     (*env)->CallStaticVoidMethod(env, cls, mid, activity, jaddr);
     if ((*env)->ExceptionCheck(env)) {
-        __android_log_print(ANDROID_LOG_ERROR, "GoOutVpn", "exception thrown by Java startVpnService");
+        __android_log_print(ANDROID_LOG_ERROR, GOOUT_LOG_TAG, "exception thrown by Java startVpnService");
         (*env)->ExceptionDescribe(env);
         (*env)->ExceptionClear(env);
+    } else {
+        __android_log_print(ANDROID_LOG_INFO, GOOUT_LOG_TAG, "Java startVpnService returned normally");
     }
     (*env)->DeleteLocalRef(env, jaddr);
     (*env)->DeleteLocalRef(env, cls);
@@ -97,6 +110,7 @@ static void androidStopVpnService(uintptr_t envPtr, uintptr_t activityPtr) {
     JNIEnv *env = (JNIEnv *)envPtr;
     jobject activity = (jobject)activityPtr;
     if (!env || !activity) {
+        __android_log_print(ANDROID_LOG_WARN, GOOUT_LOG_TAG, "androidStopVpnService: invalid env or activity");
         return;
     }
     jclass cls = goout_findVpnServiceClass(env, activity);
@@ -106,12 +120,15 @@ static void androidStopVpnService(uintptr_t envPtr, uintptr_t activityPtr) {
     jmethodID mid = (*env)->GetStaticMethodID(env, cls, "stopVpnService",
                                               "(Landroid/content/Context;)V");
     if (!mid) {
-        (*env)->ExceptionClear(env);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
         (*env)->DeleteLocalRef(env, cls);
         return;
     }
     (*env)->CallStaticVoidMethod(env, cls, mid, activity);
     if ((*env)->ExceptionCheck(env)) {
+        __android_log_print(ANDROID_LOG_ERROR, GOOUT_LOG_TAG, "exception thrown by Java stopVpnService");
         (*env)->ExceptionDescribe(env);
         (*env)->ExceptionClear(env);
     }
@@ -126,54 +143,96 @@ var (
 	protectFunc      func(int) bool
 	activeVPN        *VPNServiceManager
 	currentSocksAddr string
+	fdReadyCh        chan int
 )
 
+func resetFDReadyChannel() {
+	androidMu.Lock()
+	fdReadyCh = make(chan int, 1)
+	androidFD = -1
+	androidMu.Unlock()
+}
+
+// WaitForAndroidFD 等待系统授权并建立 TUN 接口后传回真实 FD（超时返回 false）。
+func WaitForAndroidFD(timeout time.Duration) (int, bool) {
+	androidMu.Lock()
+	ch := fdReadyCh
+	existingFD := androidFD
+	androidMu.Unlock()
+
+	if existingFD >= 0 {
+		return existingFD, true
+	}
+	if ch == nil {
+		return -1, false
+	}
+
+	select {
+	case fd := <-ch:
+		return fd, fd >= 0
+	case <-time.After(timeout):
+		return -1, false
+	}
+}
+
 // triggerAndroidVpnService 通过 JNI 让 Android 宿主启动 GoOutVpnService。
-// 注意：必须在 driver.RunNative 回调内部调用 native 函数，此时 env 才有效。
 func triggerAndroidVpnService(socksAddr string) error {
-	return driver.RunNative(func(ctx any) error {
+	log.Printf("[Android-VPN] Calling driver.RunNative to trigger GoOutVpnService, socks=%s", socksAddr)
+	err := driver.RunNative(func(ctx any) error {
 		ac, ok := ctx.(*driver.AndroidContext)
 		if !ok {
-			return fmt.Errorf("not a driver.AndroidContext")
+			return fmt.Errorf("not a driver.AndroidContext (got %T)", ctx)
+		}
+		if ac.Env == nil || ac.Ctx == nil {
+			return fmt.Errorf("driver.AndroidContext has nil Env or Ctx")
 		}
 		cAddr := C.CString(socksAddr)
 		defer C.free(unsafe.Pointer(cAddr))
 		C.androidStartVpnService(C.uintptr_t(uintptr(ac.Env)), C.uintptr_t(uintptr(ac.Ctx)), cAddr)
 		return nil
 	})
+	if err != nil {
+		log.Printf("[Android-VPN] driver.RunNative failed: %v", err)
+	}
+	return err
 }
 
 // triggerAndroidStopVpnService 通过 JNI 让 Android 宿主停止 GoOutVpnService。
 func triggerAndroidStopVpnService() {
-	_ = driver.RunNative(func(ctx any) error {
+	err := driver.RunNative(func(ctx any) error {
 		ac, ok := ctx.(*driver.AndroidContext)
 		if !ok {
+			return nil
+		}
+		if ac.Env == nil || ac.Ctx == nil {
 			return nil
 		}
 		C.androidStopVpnService(C.uintptr_t(uintptr(ac.Env)), C.uintptr_t(uintptr(ac.Ctx)))
 		return nil
 	})
+	if err != nil {
+		log.Printf("[Android-VPN] triggerAndroidStopVpnService error: %v", err)
+	}
 }
 
-// StartVPN 触发生 Android VpnService 建立 TUN 接口。
-// 真实的 fd 会通过 JNI (nativeStartVPNWithFD -> updateAndroidFD) 回传，
-// 到时再在该回调里用真实 fd 启动 tun2socks。
+// StartVPN 触发 Android VpnService 建立 TUN 接口，并等待真实 TUN FD。
+// 若超时或未拿到合法 FD，则不会错误地标记为已运行。
 func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.mu.Lock()
-	defer v.mu.Unlock()
-
 	if v.active {
+		v.mu.Unlock()
 		return nil
 	}
+	v.mu.Unlock()
 
-	// 记录期望的 socks 地址与本 manager，JNI 回调即可把真实 TUN fd 交给我们。
+	resetFDReadyChannel()
+
 	androidMu.Lock()
 	currentSocksAddr = socksAddr
 	activeVPN = v
-	androidFD = -1
 	androidMu.Unlock()
 
-	log.Printf("[Android-VPN] Starting VPN, socks=%s (waiting for TUN FD from host)", socksAddr)
+	log.Printf("[Android-VPN] Requesting Android VPN permission/service, socks=%s", socksAddr)
 
 	if err := triggerAndroidVpnService(socksAddr); err != nil {
 		androidMu.Lock()
@@ -184,20 +243,46 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		return fmt.Errorf("start android vpn: %w", err)
 	}
 
-	// 乐观地标记为 active，让 UI 显示“连接中”。
-	// tun2socks 引擎会在 updateAndroidFD 收到真实 fd 后再(重)启动。
+	fd, ok := WaitForAndroidFD(8 * time.Second)
+	if !ok || fd < 0 {
+		androidMu.Lock()
+		if activeVPN == v {
+			activeVPN = nil
+		}
+		androidMu.Unlock()
+		v.mu.Lock()
+		v.active = false
+		v.mu.Unlock()
+		return fmt.Errorf("未收到系统 VPN TUN FD（可能授权弹窗未确认/被系统关闭，或已有其他 VPN 占用）")
+	}
+
+	v.mu.Lock()
 	v.active = true
+	v.mu.Unlock()
 	return nil
 }
 
 // updateAndroidFD 由 JNI 桥接调用，接收 Android VpnService 提供的真实 TUN fd，
 // 用该 fd 启动(或重启)tun2socks 引擎，从而接管全部流量。
 func updateAndroidFD(fd int) {
+	if fd < 0 {
+		log.Printf("[Android-VPN] updateAndroidFD received invalid fd=%d", fd)
+		return
+	}
+
 	androidMu.Lock()
 	androidFD = fd
 	v := activeVPN
 	socks := currentSocksAddr
+	ch := fdReadyCh
 	androidMu.Unlock()
+
+	if ch != nil {
+		select {
+		case ch <- fd:
+		default:
+		}
+	}
 
 	if v == nil {
 		log.Printf("[Android-VPN] updateAndroidFD(fd=%d): no active VPN manager, ignoring", fd)
@@ -209,14 +294,8 @@ func updateAndroidFD(fd int) {
 		socksToUse = "127.0.0.1:10908"
 	}
 
-	v.mu.Lock()
-	v.active = true
-	v.mu.Unlock()
-
 	log.Printf("[Android-VPN] Real TUN FD=%d received, starting tun2socks (socks=%s)", fd, socksToUse)
 
-	// 用真实 fd 重建 engine。
-	// 关键：放到后台 goroutine，避免阻塞 service/UI 主线程
 	go func() {
 		jni.StopTun2Socks()
 		if err := jni.StartTun2Socks(fd, v.tunIP, v.gateway, socksToUse); err != nil {
@@ -226,6 +305,9 @@ func updateAndroidFD(fd int) {
 			v.mu.Unlock()
 			return
 		}
+		v.mu.Lock()
+		v.active = true
+		v.mu.Unlock()
 		log.Printf("[Android-VPN] tun2socks running on real FD=%d", fd)
 	}()
 }
@@ -235,13 +317,12 @@ func (v *VPNServiceManager) StopVPN() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	if !v.active {
+	if !v.active && activeVPN != v {
 		return nil
 	}
 
 	log.Println("[Android-VPN] Stopping Android VpnService TUN tunnel")
 
-	// 先停 tun2socks，再让宿主关闭 TUN 接口，避免仍在写 fd。
 	jni.StopTun2Socks()
 	triggerAndroidStopVpnService()
 
@@ -275,6 +356,32 @@ func StartVPNWithFD(fd int, socksAddr string) {
 func Java_com_gzjjjfree_goout_GoOutVpnService_nativeStartVPNWithFD(env uintptr, thiz uintptr, fd int, socksAddrPtr uintptr) {
 	log.Printf("[Android-JNI] nativeStartVPNWithFD called from Android VpnService with FD=%d", fd)
 	updateAndroidFD(fd)
+}
+
+// JNI 桥接: 用户拒绝或取消 VPN 授权，或建立接口失败
+//
+//export Java_com_gzjjjfree_goout_GoOutVpnService_nativeOnVpnPermissionDenied
+func Java_com_gzjjjfree_goout_GoOutVpnService_nativeOnVpnPermissionDenied(env uintptr, thiz uintptr) {
+	log.Println("[Android-JNI] nativeOnVpnPermissionDenied called")
+	androidMu.Lock()
+	v := activeVPN
+	activeVPN = nil
+	androidFD = -1
+	ch := fdReadyCh
+	androidMu.Unlock()
+
+	if ch != nil {
+		select {
+		case ch <- -1:
+		default:
+		}
+	}
+
+	if v != nil {
+		v.mu.Lock()
+		v.active = false
+		v.mu.Unlock()
+	}
 }
 
 // RegisterProtectCallback registers a callback function from Java/Kotlin to protect socket fds via VpnService.protect(fd).
