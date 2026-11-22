@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -82,16 +83,11 @@ func CloseLog() {
 // V2rayManager 管理 V2Ray 核心在内存中的生命周期（适配 Android 10+ W^X 安全策略）
 type V2rayManager struct {
 	mu         sync.Mutex
+	checkMu    sync.Mutex // 串行化配置检查，防止并发创建临时核心实例
 	instance   *v2core.Instance
 	isRunning  bool
 	logHandler *uiLogHandler
-	// 通过 RegisterHandler 把 UI handler 设成核心日志的全局 handler。
-	// 注意：core 在 StartInstance 内部初始化日志功能时会再次调用 RegisterHandler，
-	// 把自己注册的 logger 实例设成全局，导致本 handler 被顶掉，
-	// 因此需要在 StartInstance 成功后重新注册一次（见 Start 方法）。
 
-	// closing 标记存在尚未完成的关闭流程；closingCh 在其完成后被关闭。
-	// 用于防止"上一个实例尚未释放端口就立即启动新实例"而引起的端口冲突。
 	closing   bool
 	closingCh chan struct{}
 
@@ -179,8 +175,6 @@ func (m *V2rayManager) initLogHandler() {
 			m.emitLog(msg)
 		},
 	}
-	// 启动阶段就把 UI handler 设成全局 handler，这样核心在 StartInstance 之前
-	// 产生的日志也能进入 UI（随后会被 core 的注册顶掉，需见 Start 重新注册）。
 	v2log.RegisterHandler(m.logHandler)
 }
 
@@ -204,8 +198,6 @@ func (m *V2rayManager) ClearLogs() {
 func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	m.emitLog("Starting V2Ray core instance...")
 
-	// 若上一次关闭尚未完成，先等待其结束，
-	// 保证旧实例的监听端口已释放，避免启动新实例时端口冲突。
 	m.mu.Lock()
 	ch := m.closingCh
 	closing := m.closing
@@ -228,7 +220,6 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	m.mu.Unlock()
 
 	m.emitLog(" V2Ray core data.EnsureGeositeDat()...")
-	// 确保 geosite.dat 资产文件及 result.json 已通过 go:embed 释放到运行目录
 	data.EnsureGeositeDat()
 	m.emitLog(" V2Ray core data.EnsureResultJSON()...")
 	data.EnsureResultJSON()
@@ -248,6 +239,7 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
+				log.Printf("[V2rayManager] Start panic recovered: %v\n%s", r, debug.Stack())
 				if startErr == nil {
 					startErr = fmt.Errorf("v2ray core panicked: %v", r)
 				}
@@ -275,20 +267,14 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 
 	m.emitLog("V2Ray core in-memory instance started successfully.")
 
-	// 核心在 StartInstance 内部初始化日志功能时调过 RegisterHandler，
-	// 把全局 handler 换成了它自己的日志实例，使我们之前的注册失效。
-	// 这里重新注册一次，之后所有核心日志（diagnostic + access）都会经由
-	// 我们的 uiLogHandler 转发到 UI。
-	v2log.RegisterHandler(m.logHandler)
+	if m.logHandler != nil {
+		v2log.RegisterHandler(m.logHandler)
+	}
 
 	return nil
 }
 
-// Stop 关闭 V2Ray 内存实例。
-//
-// 实例的关闭在后台 goroutine 中进行，Stop 本身立即返回。
-// 关闭完成后会通过 closingCh 通知；启动新实例时会等待其完成，
-// 以保证旧实例的监听端口已彻底释放，避免端口冲突。
+// Stop 关闭 V2Ray 内存实例
 func (m *V2rayManager) Stop() error {
 	m.mu.Lock()
 	if !m.isRunning {
@@ -305,7 +291,7 @@ func (m *V2rayManager) Stop() error {
 	m.closingCh = make(chan struct{})
 	m.instance = nil
 	m.isRunning = false
-	m.mu.Unlock() // 立即释放锁，使启动流程能够进入 waiting
+	m.mu.Unlock()
 
 	m.emitLog("Stopping V2Ray core in-memory instance...")
 
@@ -316,16 +302,20 @@ func (m *V2rayManager) Stop() error {
 	}
 
 	go func() {
-		defer close(m.closingCh) // 无论成功/失败/panic 都确保"已完成"通知被发出
+		defer close(m.closingCh)
 		defer func() {
 			if r := recover(); r != nil {
 				m.emitLog(fmt.Sprintf("V2Ray instance close panic recovered: %v", r))
 			}
 		}()
 
-		// 给 Close 加超时保护，避免极端情况下卡死导致 closing 永不为真。
 		done := make(chan error, 1)
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					done <- fmt.Errorf("close panic: %v", r)
+				}
+			}()
 			done <- inst.Close()
 		}()
 		select {
@@ -348,24 +338,74 @@ func (m *V2rayManager) IsRunning() bool {
 	return m.isRunning
 }
 
-// CheckConfig 使用内存中的 V2Ray 核心实例验证配置是否合法
-func (m *V2rayManager) CheckConfig(configJSON []byte) error {
-	fmt.Println("Checking V2Ray configuration in memory...")
+// CheckConfig 使用内存中的 V2Ray 核心实例验证配置是否合法（带 Panic Recovery、端口隔离与日志恢复）
+func (m *V2rayManager) CheckConfig(configJSON []byte) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[V2rayManager] CheckConfig panic recovered: %v\n%s", r, debug.Stack())
+			err = fmt.Errorf("v2ray config check panicked: %v", r)
+		}
+	}()
+
+	m.checkMu.Lock()
+	defer m.checkMu.Unlock()
+
+	log.Println("Checking V2Ray configuration in memory...")
 	data.EnsureGeositeDat()
 	data.EnsureResultJSON()
 	return m.checkConfigInMemory(configJSON)
 }
 
-func (m *V2rayManager) checkConfigInMemory(configJSON []byte) error {
-	effectiveConfig := ensureV2rayLogEnabled(configJSON)
-	instance, err := v2core.StartInstance("json", effectiveConfig)
-	if err != nil {
-		return fmt.Errorf("v2ray config check failed: %w", err)
+func (m *V2rayManager) checkConfigInMemory(configJSON []byte) (err error) {
+	// 1. 先做基础 JSON 结构与必填字段预检，提前拦截明显错误
+	var raw map[string]interface{}
+	if jsonErr := json.Unmarshal(configJSON, &raw); jsonErr != nil {
+		return fmt.Errorf("invalid JSON syntax: %w", jsonErr)
+	}
+
+	// 2. 如果当前主实例正在运行，移除测试配置中的 inbounds，避免绑定相同端口（如 10808）导致端口占用失败
+	testConfig := configJSON
+	if m.IsRunning() {
+		testConfig = stripInboundsForCheck(configJSON)
+	}
+	effectiveConfig := ensureV2rayLogEnabled(testConfig)
+
+	// 3. 确保测试结束后重新挂载全局 UI 日志处理器，避免被临时实例覆盖
+	defer func() {
+		if m.logHandler != nil {
+			v2log.RegisterHandler(m.logHandler)
+		}
+	}()
+
+	// 4. 使用带 recover 与超时的启动方式，防止非法配置导致核心 panic 或卡死
+	instance, startErr := startInstanceWithTimeout(effectiveConfig, 10*time.Second)
+	if startErr != nil {
+		return fmt.Errorf("v2ray config check failed: %w", startErr)
 	}
 	if instance != nil {
-		_ = instance.Close()
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[V2rayManager] CheckConfig instance close panic: %v", r)
+				}
+			}()
+			_ = instance.Close()
+		}()
 	}
 	return nil
+}
+
+// stripInboundsForCheck 在 V2Ray 已运行时去除测试配置中的端口监听，仅验证核心/出站/路由配置
+func stripInboundsForCheck(configJSON []byte) []byte {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(configJSON, &raw); err != nil {
+		return configJSON
+	}
+	raw["inbounds"] = []interface{}{}
+	if modified, err := json.Marshal(raw); err == nil {
+		return modified
+	}
+	return configJSON
 }
 
 func ensureV2rayLogEnabled(configJSON []byte) []byte {
@@ -388,9 +428,7 @@ func ensureV2rayLogEnabled(configJSON []byte) []byte {
 	return configJSON
 }
 
-// startInstanceWithTimeout 调用 v2ray-core 的 StartInstance，并加超时保护。
-// 防止某个平台（如 Android 的 netpoll/epoll）让 StartInstance 永久挂起，
-// 导致整个 UI 进程卡在"启动中"。
+// startInstanceWithTimeout 调用 v2ray-core 的 StartInstance，并加超时与 panic 保护。
 func startInstanceWithTimeout(config []byte, timeout time.Duration) (*v2core.Instance, error) {
 	done := make(chan struct {
 		inst *v2core.Instance
@@ -398,28 +436,26 @@ func startInstanceWithTimeout(config []byte, timeout time.Duration) (*v2core.Ins
 	}, 1)
 
 	go func() {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					done <- struct {
-						inst *v2core.Instance
-						err  error
-					}{nil, fmt.Errorf("v2ray core panicked: %v", r)}
-					return
-				}
-			}()
-			inst, err := v2core.StartInstance("json", config)
-			done <- struct {
-				inst *v2core.Instance
-				err  error
-			}{inst, err}
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[V2rayManager] StartInstance goroutine panic: %v\n%s", r, debug.Stack())
+				done <- struct {
+					inst *v2core.Instance
+					err  error
+				}{nil, fmt.Errorf("v2ray core panicked: %v", r)}
+			}
 		}()
+		inst, err := v2core.StartInstance("json", config)
+		done <- struct {
+			inst *v2core.Instance
+			err  error
+		}{inst, err}
 	}()
 
 	select {
 	case res := <-done:
 		return res.inst, res.err
 	case <-time.After(timeout):
-		return nil, fmt.Errorf("v2ray core StartInstance timed out after %s (Android 端可能是 netpoll/epoll 挂起)", timeout)
+		return nil, fmt.Errorf("v2ray core StartInstance timed out after %s", timeout)
 	}
 }

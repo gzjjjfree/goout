@@ -26,6 +26,41 @@ import (
 // 若为普通全局函数，同一份符号可能被塞进两个 .o，链接时即 duplicate symbol。
 // 改为 static 后每个文件各持一份局部符号，cgo 生成的 wrapper 在同一翻译单元内即可调用。
 
+static jclass goout_findVpnServiceClass(JNIEnv *env, jobject activity) {
+    if (!activity) {
+        return (*env)->FindClass(env, "com/gzjjjfree/goout/GoOutVpnService");
+    }
+    jclass activityClass = (*env)->GetObjectClass(env, activity);
+    if (!activityClass) {
+        return (*env)->FindClass(env, "com/gzjjjfree/goout/GoOutVpnService");
+    }
+    jmethodID getClassLoader = (*env)->GetMethodID(env, activityClass, "getClassLoader", "()Ljava/lang/ClassLoader;");
+    (*env)->DeleteLocalRef(env, activityClass);
+    if (!getClassLoader) {
+        return (*env)->FindClass(env, "com/gzjjjfree/goout/GoOutVpnService");
+    }
+    jobject classLoader = (*env)->CallObjectMethod(env, activity, getClassLoader);
+    if (!classLoader) {
+        return (*env)->FindClass(env, "com/gzjjjfree/goout/GoOutVpnService");
+    }
+    jclass classLoaderClass = (*env)->FindClass(env, "java/lang/ClassLoader");
+    if (!classLoaderClass) {
+        (*env)->DeleteLocalRef(env, classLoader);
+        return (*env)->FindClass(env, "com/gzjjjfree/goout/GoOutVpnService");
+    }
+    jmethodID loadClass = (*env)->GetMethodID(env, classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    (*env)->DeleteLocalRef(env, classLoaderClass);
+    if (!loadClass) {
+        (*env)->DeleteLocalRef(env, classLoader);
+        return (*env)->FindClass(env, "com/gzjjjfree/goout/GoOutVpnService");
+    }
+    jstring className = (*env)->NewStringUTF(env, "com.gzjjjfree.goout.GoOutVpnService");
+    jclass cls = (jclass)(*env)->CallObjectMethod(env, classLoader, loadClass, className);
+    (*env)->DeleteLocalRef(env, className);
+    (*env)->DeleteLocalRef(env, classLoader);
+    return cls;
+}
+
 static void androidStartVpnService(uintptr_t envPtr, uintptr_t activityPtr, const char *socksAddr) {
     JNIEnv *env = (JNIEnv *)envPtr;
     jobject activity = (jobject)activityPtr;
@@ -33,9 +68,9 @@ static void androidStartVpnService(uintptr_t envPtr, uintptr_t activityPtr, cons
         __android_log_print(ANDROID_LOG_ERROR, "GoOutVpn", "androidStartVpnService: invalid env/activity");
         return;
     }
-    jclass cls = (*env)->FindClass(env, "com/gzjjjfree/goout/GoOutVpnService");
+    jclass cls = goout_findVpnServiceClass(env, activity);
     if (!cls) {
-        __android_log_print(ANDROID_LOG_ERROR, "GoOutVpn", "FindClass GoOutVpnService failed");
+        __android_log_print(ANDROID_LOG_ERROR, "GoOutVpn", "FindClass/LoadClass GoOutVpnService failed");
         return;
     }
     jmethodID mid = (*env)->GetStaticMethodID(env, cls, "startVpnService",
@@ -64,7 +99,7 @@ static void androidStopVpnService(uintptr_t envPtr, uintptr_t activityPtr) {
     if (!env || !activity) {
         return;
     }
-    jclass cls = (*env)->FindClass(env, "com/gzjjjfree/goout/GoOutVpnService");
+    jclass cls = goout_findVpnServiceClass(env, activity);
     if (!cls) {
         return;
     }

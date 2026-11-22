@@ -12,6 +12,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -186,7 +187,6 @@ func SetupDashboard(w fyne.Window) {
 				updateStatus()
 			})
 
-			// 顶层兜底：即使底层 panic/崩溃冒泡上来，也弹错误框而不是闪退。
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("[Dashboard] VPN 启动 panic 已恢复: %v\n%s", r, debug.Stack())
@@ -200,7 +200,6 @@ func SetupDashboard(w fyne.Window) {
 				fyne.Do(func() {
 					statusLabel.SetText("状态: VPN 启动中...")
 				})
-				// 从实际内置 V2Ray 配置文件中读取监听端口，取消硬编码 10808
 				if configBytes, err := os.ReadFile(cfg.V2RayConfigPath); err == nil {
 					var rawCfg map[string]interface{}
 					if err := json.Unmarshal(configBytes, &rawCfg); err == nil {
@@ -277,9 +276,28 @@ func SetupDashboard(w fyne.Window) {
 	w.Resize(fyne.NewSize(450, 650))
 }
 
+func showConfigCheckResultDialog(w fyne.Window, statusTitle string, configContent string) {
+	configTextEntry := widget.NewMultiLineEntry()
+	configTextEntry.SetText(configContent)
+	configTextEntry.Wrapping = fyne.TextWrapWord
+
+	scroll := container.NewVScroll(configTextEntry)
+	scroll.SetMinSize(fyne.NewSize(500, 350))
+
+	infoBox := container.NewVBox(
+		widget.NewLabelWithStyle(statusTitle, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabel("Config 全文如下："),
+		scroll,
+	)
+
+	dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
+	dInfo.Resize(fyne.NewSize(600, 500))
+	dInfo.Show()
+}
+
 func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServiceManager) {
 	var d dialog.Dialog
-	// 读取 V2Ray 配置文件内容到 map[string]interface{}
+
 	configPath := cfg.V2RayConfigPath
 	if configPath == "" {
 		configPath = "goout.json"
@@ -369,11 +387,10 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				widget.NewSeparator(),
 			)
 
-			// 实时同步修改回 inboundMap
 			tagEntry.OnChanged = func(s string) { inboundMap["tag"] = s }
 			portEntryItem.OnChanged = func(s string) {
 				if pi, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && pi > 0 {
-					inboundMap["port"] = pi // ← 存 int
+					inboundMap["port"] = pi
 				}
 			}
 			listenEntry.OnChanged = func(s string) { inboundMap["listen"] = s }
@@ -454,7 +471,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				protoEntry.SetText(pr)
 			}
 
-			// 解析嵌套字段: address, port, id, serverName, echDohServer, path, host, userAgent
 			var address, id, serverName, echDohServer, path, host, userAgent string
 			var port int
 
@@ -551,7 +567,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				widget.NewSeparator(),
 			)
 
-			// 实时同步回嵌套结构
 			tagEntry.OnChanged = func(s string) { outMap["tag"] = s }
 			protoEntry.OnChanged = func(s string) { outMap["protocol"] = s }
 			addrEntryItem.OnChanged = func(s string) {
@@ -573,7 +588,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				vn["address"] = s
 			}
 			portEntryItem.OnChanged = func(s string) {
-				pi, err := strconv.Atoi(s)
+				pi, err := strconv.Atoi(strings.TrimSpace(s))
 				if err != nil {
 					return
 				}
@@ -766,7 +781,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 		routingMap["domainStrategy"] = s
 	}
 
-	// 确保路由中的平衡器固定为 cdn-balancer-proxy
 	hasBalancer := false
 	if lst, ok := routingMap["balancers"].([]interface{}); ok {
 		for _, item := range lst {
@@ -817,7 +831,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				balancerTagEntry.SetText(bt)
 			}
 
-			// inboundTag can be slice or string
 			var inboundTagsStr string
 			if its, ok := rMap["inboundTag"].([]interface{}); ok {
 				var strs []string
@@ -831,7 +844,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				inboundTagsStr = its
 			}
 
-			// domain can be slice or string
 			var domainStr string
 			if ds, ok := rMap["domain"].([]interface{}); ok {
 				var strs []string
@@ -845,7 +857,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				domainStr = ds
 			}
 
-			// ip can be slice or string
 			var ipStr string
 			if ips, ok := rMap["ip"].([]interface{}); ok {
 				var strs []string
@@ -950,7 +961,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 		rulesContainer,
 	)
 
-	// AppTabs 组合四个Tab
 	tabs := container.NewAppTabs(
 		container.NewTabItem("主设置", mainTab),
 		container.NewTabItem("入站设置", inboundTab),
@@ -959,13 +969,17 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 	)
 
 	var lastCheckedConfigHash string
+	var hashMu sync.Mutex
+	var saveBtn *widget.Button
 
-	saveBtn := widget.NewButton("保存所有配置", func() {
+	saveBtn = widget.NewButton("保存所有配置", func() {
+		saveBtn.Disable()
+		saveBtn.SetText("正在检查配置...")
+
 		// 保存主设置到 cfg
 		cfg.TunIP = tunIPEntry.Text
 		vpnMgr.SetTunIP(cfg.TunIP)
 
-		// 从 rawCfg 中提取入站端口更新到 cfg.SocksPort
 		if inbounds, ok := rawCfg["inbounds"].([]interface{}); ok && len(inbounds) > 0 {
 			for _, ib := range inbounds {
 				if ibMap, ok := ib.(map[string]interface{}); ok {
@@ -979,113 +993,103 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 
 		_ = data.SaveConfig("config_save.json", cfg)
 
-		// 保存 V2Ray JSON 配置
-		var outBytes []byte
-		var err error
-		if outBytes, err = json.MarshalIndent(rawCfg, "", "    "); err == nil {
-			if mergedBytes, mergeErr := data.MergeConfigTemplate(data.GetDefaultConfigBytes(), outBytes); mergeErr == nil {
-				outBytes = mergedBytes
-			}
-			_ = os.WriteFile(configPath, outBytes, 0644)
-		} else {
-			marshalErr := fmt.Errorf("failed to marshal config: %w", err)
-			fyne.Do(func() {
+		// 序列化并写入 V2Ray JSON 配置
+		outBytes, err := json.MarshalIndent(rawCfg, "", "    ")
+		if err != nil {
+			saveBtn.Enable()
+			saveBtn.SetText("保存所有配置")
+			if d != nil {
 				d.Hide()
-				configTextEntry := widget.NewMultiLineEntry()
-				configTextEntry.SetText(fmt.Sprintf("%v", rawCfg))
-				configTextEntry.Wrapping = fyne.TextWrapWord
-
-				scroll := container.NewVScroll(configTextEntry)
-				scroll.SetMinSize(fyne.NewSize(500, 350))
-
-				infoBox := container.NewVBox(
-					widget.NewLabelWithStyle(fmt.Sprintf("配置保存失败 (JSON 序列化失败: %v)", marshalErr), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-					widget.NewLabel("Config 全文如下："),
-					scroll,
-				)
-
-				dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
-				dInfo.Resize(fyne.NewSize(600, 500))
-				dInfo.Show()
-			})
+			}
+			showConfigCheckResultDialog(
+				w,
+				fmt.Sprintf("配置保存失败 (JSON 序列化失败: %v)", err),
+				fmt.Sprintf("%v", rawCfg),
+			)
 			return
 		}
+
+		if mergedBytes, mergeErr := data.MergeConfigTemplate(data.GetDefaultConfigBytes(), outBytes); mergeErr == nil {
+			outBytes = mergedBytes
+		}
+		_ = os.WriteFile(configPath, outBytes, 0644)
 
 		hashBytes := sha256.Sum256(outBytes)
 		currentHash := hex.EncodeToString(hashBytes[:])
 
-		if currentHash == lastCheckedConfigHash {
-			fyne.Do(func() {
+		hashMu.Lock()
+		sameHash := currentHash == lastCheckedConfigHash
+		hashMu.Unlock()
+
+		if sameHash {
+			saveBtn.Enable()
+			saveBtn.SetText("保存所有配置")
+			if d != nil {
 				d.Hide()
-				configTextEntry := widget.NewMultiLineEntry()
-				configTextEntry.SetText(string(outBytes))
-				configTextEntry.Wrapping = fyne.TextWrapWord
-
-				scroll := container.NewVScroll(configTextEntry)
-				scroll.SetMinSize(fyne.NewSize(500, 350))
-
-				infoBox := container.NewVBox(
-					widget.NewLabelWithStyle("配置保存成功 (配置未修改，跳过重复核心检查)！", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-					widget.NewLabel("Config 全文如下："),
-					scroll,
-				)
-
-				dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
-				dInfo.Resize(fyne.NewSize(600, 500))
-				dInfo.Show()
-			})
+			}
+			showConfigCheckResultDialog(
+				w,
+				"配置保存成功 (配置未修改，跳过重复核心检查)！",
+				string(outBytes),
+			)
 			return
 		}
 
-		// 使用 v2ray 检查 config 文件
-		go func() {
+		// 异步执行 V2Ray 配置检查（带完整的 panic 兜底）
+		go func(cfgBytes []byte, hashStr string) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[Settings] CheckConfig goroutine panic recovered: %v\n%s", r, debug.Stack())
+					fyne.Do(func() {
+						saveBtn.Enable()
+						saveBtn.SetText("保存所有配置")
+						if d != nil {
+							d.Hide()
+						}
+						showConfigCheckResultDialog(
+							w,
+							fmt.Sprintf("配置已写入文件，但 V2Ray 核心检查发生异常: %v", r),
+							string(cfgBytes),
+						)
+					})
+				}
+			}()
+
 			mgr := core.GetManager(nil)
-			if checkErr := mgr.CheckConfig(outBytes); checkErr != nil {
+			if checkErr := mgr.CheckConfig(cfgBytes); checkErr != nil {
+				log.Printf("[Settings] V2Ray CheckConfig failed: %v", checkErr)
 				fyne.Do(func() {
-					d.Hide()
-					configTextEntry := widget.NewMultiLineEntry()
-					configTextEntry.SetText(string(outBytes))
-					configTextEntry.Wrapping = fyne.TextWrapWord
-
-					scroll := container.NewVScroll(configTextEntry)
-					scroll.SetMinSize(fyne.NewSize(500, 350))
-
-					infoBox := container.NewVBox(
-						widget.NewLabelWithStyle(fmt.Sprintf("配置保存失败，V2Ray 核心检查未通过: %v", checkErr), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-						widget.NewLabel("Config 全文如下："),
-						scroll,
+					saveBtn.Enable()
+					saveBtn.SetText("保存所有配置")
+					if d != nil {
+						d.Hide()
+					}
+					showConfigCheckResultDialog(
+						w,
+						fmt.Sprintf("配置已写入文件，但 V2Ray 核心检查未通过: %v", checkErr),
+						string(cfgBytes),
 					)
-
-					dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
-					dInfo.Resize(fyne.NewSize(600, 500))
-					dInfo.Show()
 				})
 				return
 			}
 
-			lastCheckedConfigHash = currentHash
+			hashMu.Lock()
+			lastCheckedConfigHash = hashStr
+			hashMu.Unlock()
 
 			fyne.Do(func() {
-				d.Hide()
-				// 显示 config 全文
-				configTextEntry := widget.NewMultiLineEntry()
-				configTextEntry.SetText(string(outBytes))
-				configTextEntry.Wrapping = fyne.TextWrapWord
-
-				scroll := container.NewVScroll(configTextEntry)
-				scroll.SetMinSize(fyne.NewSize(500, 350))
-
-				infoBox := container.NewVBox(
-					widget.NewLabelWithStyle("配置保存成功，V2Ray 核心检查通过！", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-					widget.NewLabel("Config 全文如下："),
-					scroll,
+				saveBtn.Enable()
+				saveBtn.SetText("保存所有配置")
+				if d != nil {
+					d.Hide()
+				}
+				showConfigCheckResultDialog(
+					w,
+					"配置保存成功，V2Ray 核心检查通过！",
+					string(cfgBytes),
 				)
-
-				dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
-				dInfo.Resize(fyne.NewSize(600, 500))
-				dInfo.Show()
 			})
-		}()
+		}(outBytes, currentHash)
 	})
 
 	dialogContent := container.NewBorder(nil, saveBtn, nil, nil, tabs)
