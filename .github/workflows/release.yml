@@ -83,21 +83,21 @@ jobs:
             RAW_VERSION="${GITHUB_REF#refs/tags/}"
           fi
           if [ -z "$RAW_VERSION" ]; then
-            RAW_VERSION=$(python3 -c 'import re; c=open("FyneApp.toml").read(); m=re.search(r"^version\s*=\s*\"([^\"]+)\"", c, re.M); print(m.group(1) if m else "1.0.0")')
+            RAW_VERSION=$(python3 -c 'import re; c=open("FyneApp.toml").read(); m=re.search(r"^[vV]ersion\s*=\s*\"([^\"]+)\"", c, re.M); print(m.group(1) if m else "1.0.0")')
           fi
           if [ -z "$RAW_VERSION" ]; then
             RAW_VERSION=$(git describe --tags --always 2>/dev/null || echo "1.0.0")
           fi
           CLEAN_VERSION=$(echo "$RAW_VERSION" | sed 's/^v//' | sed 's/-.*//')
           if [ -z "$CLEAN_VERSION" ] || ! [[ "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then
-            CLEAN_VERSION=$(python3 -c 'import re; c=open("FyneApp.toml").read(); m=re.search(r"^version\s*=\s*\"([^\"]+)\"", c, re.M); print(m.group(1) if m else "1.0.0")')
+            CLEAN_VERSION=$(python3 -c 'import re; c=open("FyneApp.toml").read(); m=re.search(r"^[vV]ersion\s*=\s*\"([^\"]+)\"", c, re.M); print(m.group(1) if m else "1.0.0")')
           fi
 
           BUILD_ID=$(git rev-list --count HEAD 2>/dev/null || echo "${{ github.run_number }}")
           if [ -z "$BUILD_ID" ] || ! [[ "$BUILD_ID" =~ ^[0-9]+$ ]]; then
             BUILD_ID="${{ github.run_number }}"
           fi
-          python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); c=re.sub(r"^version\s*=.*", f"version = \"{sys.argv[1]}\"", c, flags=re.M); c=re.sub(r"^build\s*=.*", f"build = {sys.argv[2]}", c, flags=re.M); open(f,"w").write(c)' "$CLEAN_VERSION" "$BUILD_ID"
+          python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); c=re.sub(r"^[vV]ersion\s*=.*", f"Version = \"{sys.argv[1]}\"", c, flags=re.M); c=re.sub(r"^[bB]uild\s*=.*", f"Build = {sys.argv[2]}", c, flags=re.M); open(f,"w").write(c)' "$CLEAN_VERSION" "$BUILD_ID"
 
           # 2. 准备缓存工具与 Android SDK 路径
           ROOT_DIR="$(pwd)"
@@ -337,7 +337,7 @@ jobs:
           if [ -z "$CLEAN_VERSION" ] || ! [[ "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then
             CLEAN_VERSION="1.0.0"
           fi
-          python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); open(f,"w").write(re.sub(r"^version\s*=.*", f"version = \"{sys.argv[1]}\"", c, flags=re.M))' "$CLEAN_VERSION"
+          python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); open(f,"w").write(re.sub(r"^[vV]ersion\s*=.*", f"Version = \"{sys.argv[1]}\"", c, flags=re.M))' "$CLEAN_VERSION"
           fyne package -os darwin -name GoOut -icon Icon.png --appVersion "$CLEAN_VERSION"
           zip -r GoOut_macOS_arm64.zip GoOut.app
 
@@ -392,7 +392,7 @@ jobs:
           if [ -z "$CLEAN_VERSION" ] || ! [[ "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then
             CLEAN_VERSION="1.0.0"
           fi
-          python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); open(f,"w").write(re.sub(r"^version\s*=.*", f"version = \"{sys.argv[1]}\"", c, flags=re.M))' "$CLEAN_VERSION"
+          python3 -c 'import sys,re; f="FyneApp.toml"; c=open(f).read(); open(f,"w").write(re.sub(r"^[vV]ersion\s*=.*", f"Version = \"{sys.argv[1]}\"", c, flags=re.M))' "$CLEAN_VERSION"
           fyne package -os windows -name GoOut -icon Icon.png --appID com.gzjjjfree.goout --appVersion "$CLEAN_VERSION"
 
       - name: Upload Windows Executable

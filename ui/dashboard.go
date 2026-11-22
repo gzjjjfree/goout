@@ -12,6 +12,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -34,7 +35,7 @@ func SetupDashboard(w fyne.Window) {
 		}
 	}
 
-	maxLogLines := 500
+	maxLogLines := 200
 	logLines := []string{"GoOut 初始化成功 (内存 V2Ray 核心)。", "准备启动代理..."}
 	logText := strings.Join(logLines, "\n")
 	logLabel := widget.NewLabel(logText)
@@ -42,18 +43,47 @@ func SetupDashboard(w fyne.Window) {
 
 	scroll := container.NewVScroll(logLabel)
 
-	// Callback for real-time log updates with fyne.Do (UI Thread Safety)
-	onLog := func(msg string) {
-		fyne.Do(func() {
-			lines := strings.Split(msg, "\n")
-			logLines = append(logLines, lines...)
-			if len(logLines) > maxLogLines {
-				logLines = logLines[len(logLines)-maxLogLines:]
+	logChan := make(chan string, 2000)
+
+	// Background worker for log throttling & batching (300ms ticker)
+	go func() {
+		ticker := time.NewTicker(300 * time.Millisecond)
+		defer ticker.Stop()
+
+		var pendingLines []string
+		for {
+			select {
+			case msg := <-logChan:
+				lines := strings.Split(msg, "\n")
+				pendingLines = append(pendingLines, lines...)
+				if len(pendingLines) > 1000 {
+					pendingLines = pendingLines[len(pendingLines)-1000:]
+				}
+			case <-ticker.C:
+				if len(pendingLines) == 0 {
+					continue
+				}
+				batch := pendingLines
+				pendingLines = nil
+
+				fyne.Do(func() {
+					logLines = append(logLines, batch...)
+					if len(logLines) > maxLogLines {
+						logLines = logLines[len(logLines)-maxLogLines:]
+					}
+					logText = strings.Join(logLines, "\n")
+					logLabel.SetText(logText)
+					scroll.ScrollToBottom()
+				})
 			}
-			logText = strings.Join(logLines, "\n")
-			logLabel.SetText(logText)
-			scroll.ScrollToBottom()
-		})
+		}
+	}()
+
+	onLog := func(msg string) {
+		select {
+		case logChan <- msg:
+		default:
+		}
 	}
 
 	v2rayMgr := core.GetManager(onLog)
@@ -202,6 +232,7 @@ func SetupDashboard(w fyne.Window) {
 		logLines = nil
 		logText = ""
 		logLabel.SetText("")
+		v2rayMgr.ClearLogs()
 	})
 
 	appVersion := Version
@@ -938,7 +969,29 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			}
 			_ = os.WriteFile(configPath, outBytes, 0644)
 		} else {
-			dialog.ShowError(fmt.Errorf("failed to marshal config: %w", err), w)
+			marshalErr := fmt.Errorf("failed to marshal config: %w", err)
+			fyne.Do(func() {
+				errDlg := dialog.NewError(marshalErr, w)
+				errDlg.SetOnClosed(func() {
+					configTextEntry := widget.NewMultiLineEntry()
+					configTextEntry.SetText(fmt.Sprintf("%v", rawCfg))
+					configTextEntry.Wrapping = fyne.TextWrapWord
+
+					scroll := container.NewVScroll(configTextEntry)
+					scroll.SetMinSize(fyne.NewSize(500, 350))
+
+					infoBox := container.NewVBox(
+						widget.NewLabelWithStyle("配置保存失败（JSON 序列化失败）", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+						widget.NewLabel("Config 全文如下："),
+						scroll,
+					)
+
+					dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
+					dInfo.Resize(fyne.NewSize(600, 500))
+					dInfo.Show()
+				})
+				errDlg.Show()
+			})
 			return
 		}
 
@@ -972,7 +1025,27 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			mgr := core.GetManager(nil)
 			if checkErr := mgr.CheckConfig(outBytes); checkErr != nil {
 				fyne.Do(func() {
-					dialog.ShowError(fmt.Errorf("V2Ray 核心配置检查失败: %w", checkErr), w)
+					checkErrWrapped := fmt.Errorf("V2Ray 核心配置检查失败: %w", checkErr)
+					errDlg := dialog.NewError(checkErrWrapped, w)
+					errDlg.SetOnClosed(func() {
+						configTextEntry := widget.NewMultiLineEntry()
+						configTextEntry.SetText(string(outBytes))
+						configTextEntry.Wrapping = fyne.TextWrapWord
+
+						scroll := container.NewVScroll(configTextEntry)
+						scroll.SetMinSize(fyne.NewSize(500, 350))
+
+						infoBox := container.NewVBox(
+							widget.NewLabelWithStyle("配置保存失败，V2Ray 核心检查未通过！", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+							widget.NewLabel("Config 全文如下："),
+							scroll,
+						)
+
+						dInfo := dialog.NewCustom("配置保存与 V2Ray 检查结果", "确定", infoBox, w)
+						dInfo.Resize(fyne.NewSize(600, 500))
+						dInfo.Show()
+					})
+					errDlg.Show()
 				})
 				return
 			}

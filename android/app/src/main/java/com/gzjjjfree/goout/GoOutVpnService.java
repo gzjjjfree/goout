@@ -1,10 +1,11 @@
 package com.gzjjjfree.goout;
 
 import android.app.Activity;
+import android.app.Application;
 import android.content.Context;
 import android.content.Intent;
 import android.net.VpnService;
-import android.os.Build;
+import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 import java.io.IOException;
@@ -19,15 +20,38 @@ public class GoOutVpnService extends VpnService {
 
     private ParcelFileDescriptor mInterface;
     private static GoOutVpnService sInstance;
-    private static String currentSocksAddr = "127.0.0.1:10808";
+    private static String currentSocksAddr = "127.0.0.1:10909";
+
+    private static volatile boolean waitingForPermission = false;
+    private static final Application.ActivityLifecycleCallbacks RESUME_CALLBACK =
+            new Application.ActivityLifecycleCallbacks() {
+        @Override public void onActivityCreated(Activity a, Bundle s) {}
+        @Override public void onActivityStarted(Activity a, Bundle s) {}
+        @Override public void onActivityResumed(Activity a) {
+            if (!waitingForPermission) return;
+            waitingForPermission = false;
+            try {
+                Application app = (Application) a.getApplicationContext();
+                app.unregisterActivityLifecycleCallbacks(RESUME_CALLBACK);
+            } catch (Throwable t) {}
+            Intent intent = VpnService.prepare(a);
+            if (intent == null) {
+                startServiceInternal(a);
+            } else {
+                Log.w(TAG, "Permission still not granted after dialog");
+            }
+        }
+        @Override public void onActivityPaused(Activity a) {}
+        @Override public void onActivityStopped(Activity a) {}
+        @Override public void onActivitySaveInstanceState(Activity a, Bundle s) {}
+        @Override public void onActivityDestroyed(Activity a) {}
+    };
 
     static {
-        // 关键：加载 Go 编译出来的原生库，否则 nativeStartVPNWithFD 会 UnsatisfiedLinkError
         System.loadLibrary("GoOut");
     }
 
     public GoOutVpnService() {
-        // 构造时再次确保本地库已加载
         System.loadLibrary("GoOut");
     }
 
@@ -46,7 +70,9 @@ public class GoOutVpnService extends VpnService {
     }
 
     public static boolean isPermissionGranted(Context context) {
-        return VpnService.prepare(context) == null;
+        Activity activity = currentForegroundActivity(context);
+        Context prepareCtx = (activity != null) ? activity : context;
+        return VpnService.prepare(prepareCtx) == null;
     }
 
     /**
@@ -54,32 +80,65 @@ public class GoOutVpnService extends VpnService {
      */
     public static void startVpnService(Context context, String socksAddr) {
         setCurrentSocksAddr(socksAddr);
-        Intent intent = VpnService.prepare(context);
+        Activity activity = currentForegroundActivity(context);
+        Context prepareCtx = (activity != null) ? activity : context;
+
+        Intent intent = VpnService.prepare(prepareCtx);
         if (intent != null) {
-            // 尚未授权 VPN 权限，弹出系统授权对话框。
-            // 宿主 Activity 必须在 onActivityResult 里调用 startServiceAfterPermission(this)。
-            if (context instanceof Activity) {
-                try {
-                    ((Activity) context).startActivityForResult(intent, REQUEST_CODE_PREPARE);
-                } catch (Throwable t) {
-                    Log.e(TAG, "startActivityForResult failed", t);
-                }
+            if (activity != null) {
+                waitingForPermission = true;
+                final Activity act = activity;
+                act.runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        try {
+                            Application app = (Application) act.getApplicationContext();
+                            app.registerActivityLifecycleCallbacks(RESUME_CALLBACK);
+                            act.startActivityForResult(intent, REQUEST_CODE_PREPARE);
+                        } catch (Throwable t) {
+                            Log.e(TAG, "startActivityForResult failed", t);
+                            waitingForPermission = false;
+                            try {
+                                Application app = (Application) act.getApplicationContext();
+                                app.unregisterActivityLifecycleCallbacks(RESUME_CALLBACK);
+                            } catch (Throwable ignored) {}
+                        }
+                    }
+                });
             } else {
                 Log.e(TAG, "VPN permission is required, but no Activity is available");
             }
         } else {
-            // 已授权，直接启动服务
-            startServiceInternal(context);
+            startServiceInternal(prepareCtx);
         }
+    }
+
+    private static Activity currentForegroundActivity(Context context) {
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            java.lang.reflect.Method m = at.getMethod("currentActivity");
+            m.setAccessible(true);
+            Object act = m.invoke(null);
+            if (act instanceof Activity) {
+                return (Activity) act;
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "currentActivity reflection failed", t);
+        }
+        if (context instanceof Activity) {
+            return (Activity) context;
+        }
+        return null;
     }
 
     /**
      * 宿主 Activity.onActivityResult 中调用：权限授予后再启动服务。
      */
     public static void startServiceAfterPermission(Context context) {
-        Intent intent = VpnService.prepare(context);
+        Activity activity = currentForegroundActivity(context);
+        Context prepareCtx = (activity != null) ? activity : context;
+        Intent intent = VpnService.prepare(prepareCtx);
         if (intent == null) {
-            startServiceInternal(context);
+            startServiceInternal(prepareCtx);
         } else {
             Log.w(TAG, "VPN permission not granted yet, service not started");
         }
@@ -90,9 +149,11 @@ public class GoOutVpnService extends VpnService {
      */
     public static void stopVpnService(Context context) {
         try {
-            Intent intent = new Intent(context, GoOutVpnService.class);
+            Activity activity = currentForegroundActivity(context);
+            Context ctx = (activity != null) ? activity : context;
+            Intent intent = new Intent(ctx, GoOutVpnService.class);
             intent.setAction("STOP");
-            context.stopService(intent);
+            ctx.stopService(intent);
         } catch (Throwable t) {
             Log.e(TAG, "Failed to stop VPN service", t);
         }
