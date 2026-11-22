@@ -26,39 +26,16 @@ import (
 // 若为普通全局函数，同一份符号可能被塞进两个 .o，链接时即 duplicate symbol。
 // 改为 static 后每个文件各持一份局部符号，cgo 生成的 wrapper 在同一翻译单元内即可调用。
 
-static jobject goout_getForegroundActivity(JNIEnv *env) {
-    jclass activityThreadClass = (*env)->FindClass(env, "android/app/ActivityThread");
-    if (!activityThreadClass) {
-        return NULL;
-    }
-    jmethodID m = (*env)->GetStaticMethodID(env, activityThreadClass, "currentActivity", "()Landroid/app/Activity;");
-    if (!m) {
-        (*env)->ExceptionClear(env);
-        (*env)->DeleteLocalRef(env, activityThreadClass);
-        return NULL;
-    }
-    jobject act = (*env)->CallStaticObjectMethod(env, activityThreadClass, m);
-    (*env)->DeleteLocalRef(env, activityThreadClass);
-    return act;
-}
-
 static void androidStartVpnService(uintptr_t envPtr, uintptr_t activityPtr, const char *socksAddr) {
     JNIEnv *env = (JNIEnv *)envPtr;
-    if (!env) {
-        __android_log_print(ANDROID_LOG_ERROR, "GoOutVpn", "androidStartVpnService: invalid env");
+    jobject activity = (jobject)activityPtr;
+    if (!env || !activity) {
+        __android_log_print(ANDROID_LOG_ERROR, "GoOutVpn", "androidStartVpnService: invalid env/activity");
         return;
     }
-
-    jobject activity = goout_getForegroundActivity(env);
-    if (!activity) {
-        __android_log_print(ANDROID_LOG_ERROR, "GoOutVpn", "no foreground activity (is an Activity running?)");
-        return;
-    }
-
     jclass cls = (*env)->FindClass(env, "com/gzjjjfree/goout/GoOutVpnService");
     if (!cls) {
         __android_log_print(ANDROID_LOG_ERROR, "GoOutVpn", "FindClass GoOutVpnService failed");
-        (*env)->DeleteLocalRef(env, activity);
         return;
     }
     jmethodID mid = (*env)->GetStaticMethodID(env, cls, "startVpnService",
@@ -67,7 +44,6 @@ static void androidStartVpnService(uintptr_t envPtr, uintptr_t activityPtr, cons
         __android_log_print(ANDROID_LOG_ERROR, "GoOutVpn", "GetStaticMethodID startVpnService failed");
         (*env)->ExceptionClear(env);
         (*env)->DeleteLocalRef(env, cls);
-        (*env)->DeleteLocalRef(env, activity);
         return;
     }
     const char *addr = socksAddr ? socksAddr : "127.0.0.1:10909";
@@ -80,21 +56,16 @@ static void androidStartVpnService(uintptr_t envPtr, uintptr_t activityPtr, cons
     }
     (*env)->DeleteLocalRef(env, jaddr);
     (*env)->DeleteLocalRef(env, cls);
-    (*env)->DeleteLocalRef(env, activity);
 }
 
 static void androidStopVpnService(uintptr_t envPtr, uintptr_t activityPtr) {
     JNIEnv *env = (JNIEnv *)envPtr;
-    if (!env) {
-        return;
-    }
-    jobject activity = goout_getForegroundActivity(env);
-    if (!activity) {
+    jobject activity = (jobject)activityPtr;
+    if (!env || !activity) {
         return;
     }
     jclass cls = (*env)->FindClass(env, "com/gzjjjfree/goout/GoOutVpnService");
     if (!cls) {
-        (*env)->DeleteLocalRef(env, activity);
         return;
     }
     jmethodID mid = (*env)->GetStaticMethodID(env, cls, "stopVpnService",
@@ -102,7 +73,6 @@ static void androidStopVpnService(uintptr_t envPtr, uintptr_t activityPtr) {
     if (!mid) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteLocalRef(env, cls);
-        (*env)->DeleteLocalRef(env, activity);
         return;
     }
     (*env)->CallStaticVoidMethod(env, cls, mid, activity);
@@ -111,7 +81,6 @@ static void androidStopVpnService(uintptr_t envPtr, uintptr_t activityPtr) {
         (*env)->ExceptionClear(env);
     }
     (*env)->DeleteLocalRef(env, cls);
-    (*env)->DeleteLocalRef(env, activity);
 }
 */
 import "C"
@@ -202,7 +171,7 @@ func updateAndroidFD(fd int) {
 
 	socksToUse := socks
 	if socksToUse == "" {
-		socksToUse = "127.0.0.1:10909"
+		socksToUse = "127.0.0.1:10908"
 	}
 
 	v.mu.Lock()

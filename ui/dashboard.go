@@ -278,6 +278,7 @@ func SetupDashboard(w fyne.Window) {
 }
 
 func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServiceManager) {
+	var d dialog.Dialog
 	// 读取 V2Ray 配置文件内容到 map[string]interface{}
 	configPath := cfg.V2RayConfigPath
 	if configPath == "" {
@@ -989,6 +990,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 		} else {
 			marshalErr := fmt.Errorf("failed to marshal config: %w", err)
 			fyne.Do(func() {
+				d.Hide()
 				configTextEntry := widget.NewMultiLineEntry()
 				configTextEntry.SetText(fmt.Sprintf("%v", rawCfg))
 				configTextEntry.Wrapping = fyne.TextWrapWord
@@ -1014,6 +1016,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 
 		if currentHash == lastCheckedConfigHash {
 			fyne.Do(func() {
+				d.Hide()
 				configTextEntry := widget.NewMultiLineEntry()
 				configTextEntry.SetText(string(outBytes))
 				configTextEntry.Wrapping = fyne.TextWrapWord
@@ -1039,6 +1042,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			mgr := core.GetManager(nil)
 			if checkErr := mgr.CheckConfig(outBytes); checkErr != nil {
 				fyne.Do(func() {
+					d.Hide()
 					configTextEntry := widget.NewMultiLineEntry()
 					configTextEntry.SetText(string(outBytes))
 					configTextEntry.Wrapping = fyne.TextWrapWord
@@ -1062,6 +1066,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 			lastCheckedConfigHash = currentHash
 
 			fyne.Do(func() {
+				d.Hide()
 				// 显示 config 全文
 				configTextEntry := widget.NewMultiLineEntry()
 				configTextEntry.SetText(string(outBytes))
@@ -1085,7 +1090,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 
 	dialogContent := container.NewBorder(nil, saveBtn, nil, nil, tabs)
 
-	d := dialog.NewCustom("系统与代理设置", "关闭", dialogContent, w)
+	d = dialog.NewCustom("系统与代理设置", "关闭", dialogContent, w)
 	d.Resize(fyne.NewSize(550, 700))
 	d.Show()
 }
