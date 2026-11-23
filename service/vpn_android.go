@@ -1,6 +1,3 @@
-
-//go:build android
-
 package service
 
 import (
@@ -8,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"sync"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -192,19 +188,10 @@ func init() {
 		})
 		return success
 	})
-}
 
-// ProtectDialerControl 可直接赋给 net.Dialer.Control，在新建出站 Socket 后自动调用 VpnService.protect(fd)。
-func ProtectDialerControl(network, address string, c syscall.RawConn) error {
-	var protectErr error
-	if err := c.Control(func(fd uintptr) {
-		if !ProtectSocket(int(fd)) {
-			protectErr = fmt.Errorf("failed to protect socket fd=%d for %s (%s)", fd, address, network)
-		}
-	}); err != nil {
-		return err
+	protectSocketFD = func(fd int) bool {
+		return ProtectSocket(fd)
 	}
-	return protectErr
 }
 
 func resetFDReadyChannel() {
@@ -468,4 +455,3 @@ func ProtectSocket(fd int) bool {
 func Java_com_gzjjjfree_goout_GoOutVpnService_nativeRegisterProtect(env uintptr, thiz uintptr) {
 	log.Println("[Android-JNI] nativeRegisterProtect called")
 }
-、

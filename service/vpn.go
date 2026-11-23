@@ -7,9 +7,31 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/gzjjjfree/goout/util"
 )
+
+// protectSocketFD 默认在非 Android / 未启用 VPN 保护的平台上直接放行（返回 true）。
+// Android 平台会在 vpn_android.go 的 init() 中覆盖为真实的 VpnService.protect(fd) 调用。
+var protectSocketFD = func(fd int) bool {
+	return true
+}
+
+// ProtectDialerControl 可直接赋给 net.Dialer.Control。
+// 在 Android 开启 VPN 时会将出站 Socket FD 排除出 TUN 路由以走物理网卡；
+// 在其他平台（不使用 TUN）则直接返回 nil。
+func ProtectDialerControl(network, address string, c syscall.RawConn) error {
+	var protectErr error
+	if err := c.Control(func(fd uintptr) {
+		if !protectSocketFD(int(fd)) {
+			protectErr = fmt.Errorf("failed to protect socket fd=%d for %s (%s)", fd, address, network)
+		}
+	}); err != nil {
+		return err
+	}
+	return protectErr
+}
 
 // CheckHttpInbound checks if an HTTP inbound is configured in any of the standard config files,
 // returning whether it's HTTP, along with the proxy host and port.
