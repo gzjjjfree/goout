@@ -1,3 +1,4 @@
+
 //go:build android
 
 package service
@@ -7,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -155,6 +157,7 @@ static jboolean androidProtectSocket(uintptr_t envPtr, uintptr_t activityPtr, ji
     }
     jboolean res = (*env)->CallStaticBooleanMethod(env, cls, mid, fd);
     if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
         (*env)->ExceptionClear(env);
     }
     (*env)->DeleteLocalRef(env, cls);
@@ -174,6 +177,9 @@ var (
 
 func init() {
 	RegisterProtectCallback(func(fd int) bool {
+		if fd < 0 {
+			return false
+		}
 		var success bool
 		_ = driver.RunNative(func(ctx any) error {
 			ac, ok := ctx.(*driver.AndroidContext)
@@ -186,6 +192,19 @@ func init() {
 		})
 		return success
 	})
+}
+
+// ProtectDialerControl 可直接赋给 net.Dialer.Control，在新建出站 Socket 后自动调用 VpnService.protect(fd)。
+func ProtectDialerControl(network, address string, c syscall.RawConn) error {
+	var protectErr error
+	if err := c.Control(func(fd uintptr) {
+		if !ProtectSocket(int(fd)) {
+			protectErr = fmt.Errorf("failed to protect socket fd=%d for %s (%s)", fd, address, network)
+		}
+	}); err != nil {
+		return err
+	}
+	return protectErr
 }
 
 func resetFDReadyChannel() {
@@ -258,7 +277,6 @@ func triggerAndroidStopVpnService() {
 }
 
 // StartVPN 触发 Android VpnService 建立 TUN 接口，并等待真实 TUN FD。
-// 若超时或未拿到合法 FD，则不会错误地标记为已运行。
 func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.mu.Lock()
 	if v.active {
@@ -450,3 +468,4 @@ func ProtectSocket(fd int) bool {
 func Java_com_gzjjjfree_goout_GoOutVpnService_nativeRegisterProtect(env uintptr, thiz uintptr) {
 	log.Println("[Android-JNI] nativeRegisterProtect called")
 }
+、

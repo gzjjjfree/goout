@@ -11,7 +11,7 @@ import java.io.IOException;
 
 /**
  * Android VpnService 宿主：负责调起系统 VPN、建立 TUN 接口，
- * 并通过 JNI 把真实 fd 传回 Go 侧，由 tun2socks 接管流量。
+ * 提供 Socket 保护接口（protect），并通过 JNI 把真实 fd 传回 Go 侧。
  */
 public class GoOutVpnService extends VpnService {
     private static final String TAG = "GoOutVpnService";
@@ -41,13 +41,21 @@ public class GoOutVpnService extends VpnService {
         return sInstance;
     }
 
+    /**
+     * 供 JNI 调用：将出站 Socket FD 排除出 VPN 路由，使其走底层物理网卡。
+     */
     public static boolean protectFd(int fd) {
-        if (sInstance != null) {
-            boolean success = sInstance.protect(fd);
-            Log.i(TAG, "protectFd: fd=" + fd + ", success=" + success);
-            return success;
+        if (fd < 0) {
+            Log.w(TAG, "protectFd: invalid fd=" + fd);
+            return false;
         }
-        Log.w(TAG, "protectFd: sInstance is null, cannot protect fd=" + fd);
+        GoOutVpnService svc = sInstance;
+        if (svc != null) {
+            boolean ok = svc.protect(fd);
+            Log.i(TAG, "protectFd: fd=" + fd + ", success=" + ok);
+            return ok;
+        }
+        Log.w(TAG, "protectFd: GoOutVpnService instance is null, fd=" + fd);
         return false;
     }
 
@@ -92,13 +100,12 @@ public class GoOutVpnService extends VpnService {
         }
 
         if (prepareIntent != null) {
-            Log.i(TAG, "VPN permission intent required, context=" + context.getClass().getName()
-                    + ", intent=" + prepareIntent);
+            Log.i(TAG, "VPN permission intent required, context=" + context.getClass().getName());
             try {
                 if (context instanceof Activity) {
                     Activity act = (Activity) context;
                     if (act.isFinishing() || act.isDestroyed()) {
-                        Log.w(TAG, "Host Activity is finishing/destroyed, cannot launch permission dialog");
+                        Log.w(TAG, "Host Activity is finishing/destroyed");
                         return;
                     }
                     act.startActivityForResult(prepareIntent, REQUEST_VPN_PERMISSION);
@@ -118,8 +125,7 @@ public class GoOutVpnService extends VpnService {
     }
 
     /**
-     * 供宿主 Activity 的 onActivityResult 调用，在用户授权后自动启动服务；
-     * 若用户拒绝或系统取消，则通知 Go 侧取消等待状态。
+     * 供宿主 Activity 的 onActivityResult 调用。
      */
     public static void onVpnPermissionResult(Context context, int requestCode, int resultCode) {
         if (requestCode != REQUEST_VPN_PERMISSION) {
@@ -129,7 +135,7 @@ public class GoOutVpnService extends VpnService {
             Log.i(TAG, "VPN permission granted by user, starting GoOutVpnService");
             startServiceInternal(context);
         } else {
-            Log.w(TAG, "VPN permission denied or cancelled by user, resultCode=" + resultCode);
+            Log.w(TAG, "VPN permission denied or cancelled, resultCode=" + resultCode);
             nativeOnVpnPermissionDenied();
         }
     }
@@ -184,7 +190,7 @@ public class GoOutVpnService extends VpnService {
 
     private void startVpn() {
         if (mInterface != null) {
-            Log.i(TAG, "startVpn: interface already established, fd=" + mInterface.getFd());
+            Log.i(TAG, "startVpn: interface already established");
             return;
         }
         try {

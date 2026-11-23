@@ -97,12 +97,17 @@
             },
             {
                 "type": "field",
+                "outboundTag": "adblock",
+                "domain": [
+                    "domain:algolia.net",
+                    "geosite:category-ads-all"
+                ]
+            },
+            {
+                "type": "field",
                 "balancerTag": "cdn-balancer-proxy",
                 "domain": [
                     "geosite:geolocation-!cn"
-                ],
-                "inboundTag": [
-                    "gz"
                 ]
             },
             {
@@ -110,14 +115,6 @@
                 "outboundTag": "direct",
                 "inboundTag": [
                     "gz"
-                ]
-            },
-            {
-                "type": "field",
-                "outboundTag": "adblock",
-                "domain": [
-                    "domain:algolia.net",
-                    "geosite:category-ads-all"
                 ]
             }
         ]
