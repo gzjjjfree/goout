@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -49,6 +50,9 @@ func (w *logWriter) Write(p []byte) (n int, err error) {
 		if globalManager != nil {
 			globalManager.addLog("%s", trimmed)
 		} else {
+			if len(earlyLogs) >= 500 {
+				earlyLogs = earlyLogs[len(earlyLogs)-499:]
+			}
 			earlyLogs = append(earlyLogs, trimmed)
 		}
 		earlyMu.Unlock()
@@ -83,7 +87,7 @@ func CloseLog() {
 // V2rayManager 管理 V2Ray 核心在内存中的生命周期（适配 Android 10+ W^X 安全策略）
 type V2rayManager struct {
 	mu         sync.Mutex
-	checkMu    sync.Mutex // 串行化配置检查，防止并发创建临时核心实例
+	checkMu    sync.Mutex
 	instance   *v2core.Instance
 	isRunning  bool
 	logHandler *uiLogHandler
@@ -104,8 +108,15 @@ type uiLogHandler struct {
 }
 
 func (h *uiLogHandler) Handle(msg v2log.Message) {
+	if msg == nil {
+		return
+	}
+	text := msg.String()
+	if strings.Contains(text, "[Debug]") {
+		return
+	}
 	if h.onLog != nil {
-		h.onLog(msg.String())
+		h.onLog(text)
 	}
 }
 
@@ -118,7 +129,7 @@ var (
 func GetManager(onLog func(string)) *V2rayManager {
 	managerOnce.Do(func() {
 		globalManager = &V2rayManager{
-			maxLogs: 500,
+			maxLogs: 200,
 			onLog:   onLog,
 		}
 		globalManager.initLogHandler()
@@ -132,7 +143,9 @@ func GetManager(onLog func(string)) *V2rayManager {
 	earlyMu.Lock()
 	if len(earlyLogs) > 0 {
 		for _, l := range earlyLogs {
-			globalManager.addLog("%s", l)
+			if !strings.Contains(l, "[Debug]") {
+				globalManager.addLog("%s", l)
+			}
 		}
 		earlyLogs = nil
 	}
@@ -142,6 +155,9 @@ func GetManager(onLog func(string)) *V2rayManager {
 }
 
 func (m *V2rayManager) emitLog(msg string) {
+	if strings.Contains(msg, "[Debug]") {
+		return
+	}
 	m.mu.Lock()
 	fn := m.onLog
 	m.mu.Unlock()
@@ -150,13 +166,27 @@ func (m *V2rayManager) emitLog(msg string) {
 	}
 }
 
+func (m *V2rayManager) appendLogLocked(msg string) {
+	if strings.Contains(msg, "[Debug]") {
+		return
+	}
+	limit := m.maxLogs
+	if limit <= 0 {
+		limit = 200
+	}
+	m.logs = append(m.logs, msg)
+	if len(m.logs) > limit {
+		m.logs = m.logs[len(m.logs)-limit:]
+	}
+}
+
 func (m *V2rayManager) addLog(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	m.logMu.Lock()
-	m.logs = append(m.logs, msg)
-	if len(m.logs) > m.maxLogs {
-		m.logs = m.logs[1:]
+	if strings.Contains(msg, "[Debug]") {
+		return
 	}
+	m.logMu.Lock()
+	m.appendLogLocked(msg)
 	m.logMu.Unlock()
 
 	m.emitLog(msg)
@@ -165,11 +195,11 @@ func (m *V2rayManager) addLog(format string, args ...any) {
 func (m *V2rayManager) initLogHandler() {
 	m.logHandler = &uiLogHandler{
 		onLog: func(msg string) {
-			m.logMu.Lock()
-			m.logs = append(m.logs, msg)
-			if len(m.logs) > m.maxLogs {
-				m.logs = m.logs[1:]
+			if strings.Contains(msg, "[Debug]") {
+				return
 			}
+			m.logMu.Lock()
+			m.appendLogLocked(msg)
 			m.logMu.Unlock()
 
 			m.emitLog(msg)
@@ -194,7 +224,15 @@ func (m *V2rayManager) ClearLogs() {
 	m.logs = nil
 }
 
-// Start 在内存中启动 V2Ray 实例（带 Panic Recovery 与并发保护）
+func formatConfigForLog(cfgBytes []byte) string {
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, cfgBytes, "", "  "); err == nil {
+		return pretty.String()
+	}
+	return string(cfgBytes)
+}
+
+// Start 在内存中启动 V2Ray 实例（带 Panic Recovery、并发保护与完整配置输出）
 func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	m.emitLog("Starting V2Ray core instance...")
 
@@ -204,7 +242,7 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	m.mu.Unlock()
 
 	if closing {
-		m.emitLog(" V2Ray core closing...")
+		m.emitLog("V2Ray core closing...")
 		select {
 		case <-ch:
 		case <-time.After(5 * time.Second):
@@ -219,9 +257,9 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	}
 	m.mu.Unlock()
 
-	m.emitLog(" V2Ray core data.EnsureGeositeDat()...")
+	m.emitLog("V2Ray core data.EnsureGeositeDat()...")
 	data.EnsureGeositeDat()
-	m.emitLog(" V2Ray core data.EnsureResultJSON()...")
+	m.emitLog("V2Ray core data.EnsureResultJSON()...")
 	data.EnsureResultJSON()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -230,9 +268,11 @@ func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	m.cancel = cancel
 	m.mu.Unlock()
 
-	m.emitLog("Starting V2Ray core in-memory instance...")
-
 	effectiveConfig := ensureV2rayLogEnabled(configJSON)
+
+	// 在启动 V2Ray 核心时将完整配置输出到日志栏
+	m.emitLog("=== V2Ray Config 开始 ===\n" + formatConfigForLog(effectiveConfig) + "\n=== V2Ray Config 结束 ===")
+	m.emitLog("Starting V2Ray core in-memory instance...")
 
 	var instance *v2core.Instance
 	var startErr error
@@ -338,7 +378,7 @@ func (m *V2rayManager) IsRunning() bool {
 	return m.isRunning
 }
 
-// CheckConfig 使用内存中的 V2Ray 核心实例验证配置是否合法（带 Panic Recovery、端口隔离与日志恢复）
+// CheckConfig 使用内存中的 V2Ray 核心实例验证配置是否合法
 func (m *V2rayManager) CheckConfig(configJSON []byte) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -357,27 +397,23 @@ func (m *V2rayManager) CheckConfig(configJSON []byte) (err error) {
 }
 
 func (m *V2rayManager) checkConfigInMemory(configJSON []byte) (err error) {
-	// 1. 先做基础 JSON 结构与必填字段预检，提前拦截明显错误
 	var raw map[string]interface{}
 	if jsonErr := json.Unmarshal(configJSON, &raw); jsonErr != nil {
 		return fmt.Errorf("invalid JSON syntax: %w", jsonErr)
 	}
 
-	// 2. 如果当前主实例正在运行，移除测试配置中的 inbounds，避免绑定相同端口（如 10808）导致端口占用失败
 	testConfig := configJSON
 	if m.IsRunning() {
 		testConfig = stripInboundsForCheck(configJSON)
 	}
 	effectiveConfig := ensureV2rayLogEnabled(testConfig)
 
-	// 3. 确保测试结束后重新挂载全局 UI 日志处理器，避免被临时实例覆盖
 	defer func() {
 		if m.logHandler != nil {
 			v2log.RegisterHandler(m.logHandler)
 		}
 	}()
 
-	// 4. 使用带 recover 与超时的启动方式，防止非法配置导致核心 panic 或卡死
 	instance, startErr := startInstanceWithTimeout(effectiveConfig, 10*time.Second)
 	if startErr != nil {
 		return fmt.Errorf("v2ray config check failed: %w", startErr)
@@ -395,7 +431,6 @@ func (m *V2rayManager) checkConfigInMemory(configJSON []byte) (err error) {
 	return nil
 }
 
-// stripInboundsForCheck 在 V2Ray 已运行时去除测试配置中的端口监听，仅验证核心/出站/路由配置
 func stripInboundsForCheck(configJSON []byte) []byte {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(configJSON, &raw); err != nil {
@@ -419,7 +454,7 @@ func ensureV2rayLogEnabled(configJSON []byte) []byte {
 		raw["log"] = logObj
 	}
 	level, _ := logObj["loglevel"].(string)
-	if level == "" || level == "none" {
+	if level == "" || level == "none" || level == "debug" {
 		logObj["loglevel"] = "warning"
 	}
 	if modified, err := json.Marshal(raw); err == nil {
@@ -428,7 +463,6 @@ func ensureV2rayLogEnabled(configJSON []byte) []byte {
 	return configJSON
 }
 
-// startInstanceWithTimeout 调用 v2ray-core 的 StartInstance，并加超时与 panic 保护。
 func startInstanceWithTimeout(config []byte, timeout time.Duration) (*v2core.Instance, error) {
 	done := make(chan struct {
 		inst *v2core.Instance
