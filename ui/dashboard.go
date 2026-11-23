@@ -197,9 +197,6 @@ func SetupDashboard(w fyne.Window) {
 		if strings.Contains(msg, "[Debug]") {
 			return
 		}
-		if v2rayMgr != nil && !v2rayMgr.IsRunning() {
-			return
-		}
 		select {
 		case logChan <- msg:
 			scheduleFlush()
