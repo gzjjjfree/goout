@@ -2,11 +2,6 @@
     "log": {
         "loglevel": "warning"
     },
-    "dns": {
-        "servers": [
-            "localhost"
-        ]
-    },
     "inbounds": [
         {
             "tag": "gz",
@@ -95,6 +90,11 @@
             }
         ],
         "rules": [
+            {
+                "type": "field",
+                "port": "53",
+                "outboundTag": "direct"
+            },
             {
                 "type": "field",
                 "balancerTag": "cdn-balancer-proxy",

@@ -134,6 +134,32 @@ static void androidStopVpnService(uintptr_t envPtr, uintptr_t activityPtr) {
     }
     (*env)->DeleteLocalRef(env, cls);
 }
+
+static jboolean androidProtectSocket(uintptr_t envPtr, uintptr_t activityPtr, jint fd) {
+    JNIEnv *env = (JNIEnv *)envPtr;
+    jobject activity = (jobject)activityPtr;
+    if (!env || !activity) {
+        return JNI_FALSE;
+    }
+    jclass cls = goout_findVpnServiceClass(env, activity);
+    if (!cls) {
+        return JNI_FALSE;
+    }
+    jmethodID mid = (*env)->GetStaticMethodID(env, cls, "protectFd", "(I)Z");
+    if (!mid) {
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        (*env)->DeleteLocalRef(env, cls);
+        return JNI_FALSE;
+    }
+    jboolean res = (*env)->CallStaticBooleanMethod(env, cls, mid, fd);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
+    (*env)->DeleteLocalRef(env, cls);
+    return res;
+}
 */
 import "C"
 
@@ -145,6 +171,22 @@ var (
 	currentSocksAddr string
 	fdReadyCh        chan int
 )
+
+func init() {
+	RegisterProtectCallback(func(fd int) bool {
+		var success bool
+		_ = driver.RunNative(func(ctx any) error {
+			ac, ok := ctx.(*driver.AndroidContext)
+			if !ok || ac.Env == 0 || ac.Ctx == 0 {
+				return fmt.Errorf("invalid android context")
+			}
+			res := C.androidProtectSocket(C.uintptr_t(ac.Env), C.uintptr_t(ac.Ctx), C.jint(fd))
+			success = bool(res)
+			return nil
+		})
+		return success
+	})
+}
 
 func resetFDReadyChannel() {
 	androidMu.Lock()

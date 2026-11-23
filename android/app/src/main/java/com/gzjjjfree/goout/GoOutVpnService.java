@@ -41,6 +41,16 @@ public class GoOutVpnService extends VpnService {
         return sInstance;
     }
 
+    public static boolean protectFd(int fd) {
+        if (sInstance != null) {
+            boolean success = sInstance.protect(fd);
+            Log.i(TAG, "protectFd: fd=" + fd + ", success=" + success);
+            return success;
+        }
+        Log.w(TAG, "protectFd: sInstance is null, cannot protect fd=" + fd);
+        return false;
+    }
+
     public static void setCurrentSocksAddr(String addr) {
         if (addr != null && !addr.isEmpty()) {
             currentSocksAddr = addr;
