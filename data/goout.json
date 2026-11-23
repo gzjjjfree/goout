@@ -97,11 +97,6 @@
         "rules": [
             {
                 "type": "field",
-                "port": "53",
-                "outboundTag": "direct"
-            },
-            {
-                "type": "field",
                 "outboundTag": "adblock",
                 "domain": [
                     "domain:algolia.net",
