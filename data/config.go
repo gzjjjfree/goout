@@ -4,7 +4,6 @@ package data
 import (
 	_ "embed"
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -39,7 +38,7 @@ func getTargetDir() string {
 		if writable := getWritableDir(); writable != "" {
 			targetDir = writable
 		}
-		log.Printf("[GoOut] targetDir=%s ", targetDir)
+		// log.Printf("[GoOut] targetDir=%s ", targetDir)
 	}
 
 	return targetDir
