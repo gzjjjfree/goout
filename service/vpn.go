@@ -37,7 +37,7 @@ func ProtectDialerControl(network, address string, c syscall.RawConn) error {
 // returning whether it's HTTP, along with the proxy host and port.
 func CheckHttpInbound(socksAddr string) (bool, string, string) {
 	host := "127.0.0.1"
-	port := "10808"
+	port := "10908"
 	if parts := strings.Split(socksAddr, ":"); len(parts) == 2 {
 		host = parts[0]
 		port = parts[1]
