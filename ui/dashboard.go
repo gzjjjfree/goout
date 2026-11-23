@@ -1095,7 +1095,39 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 		}(outBytes, currentHash)
 	})
 
-	dialogContent := container.NewBorder(nil, saveBtn, nil, nil, tabs)
+	restoreDefaultBtn := widget.NewButton("恢复默认", func() {
+		dialog.ShowConfirm("确认", "确定要恢复默认设置吗？这将重载原始的 goout.json 配置。", func(ok bool) {
+			if !ok {
+				return
+			}
+			defaultBytes := data.GetDefaultConfigBytes()
+			_ = os.WriteFile(configPath, defaultBytes, 0644)
+
+			_ = json.Unmarshal(defaultBytes, &rawCfg)
+			cfg.TunIP = "10.0.0.2"
+			tunIPEntry.SetText(cfg.TunIP)
+
+			updateInboundsUI()
+			updateOutboundsUI()
+
+			routingMap, _ = rawCfg["routing"].(map[string]interface{})
+			if routingMap == nil {
+				routingMap = make(map[string]interface{})
+				rawCfg["routing"] = routingMap
+			}
+			if ds, ok := routingMap["domainStrategy"].(string); ok {
+				domainStrategyEntry.SetText(ds)
+			} else {
+				domainStrategyEntry.SetText("")
+			}
+			updateRulesUI()
+
+			dialog.ShowInformation("成功", "已成功恢复默认设置！", w)
+		}, w)
+	})
+
+	bottomContainer := container.NewHBox(restoreDefaultBtn, saveBtn)
+	dialogContent := container.NewBorder(nil, bottomContainer, nil, nil, tabs)
 
 	d = dialog.NewCustom("系统与代理设置", "关闭", dialogContent, w)
 	d.Resize(fyne.NewSize(550, 700))

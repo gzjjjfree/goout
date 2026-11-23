@@ -181,7 +181,7 @@ func init() {
 				return fmt.Errorf("invalid android context")
 			}
 			res := C.androidProtectSocket(C.uintptr_t(ac.Env), C.uintptr_t(ac.Ctx), C.jint(fd))
-			success = bool(res)
+			success = res != 0
 			return nil
 		})
 		return success
