@@ -453,10 +453,7 @@ func ensureV2rayLogEnabled(configJSON []byte) []byte {
 		logObj = make(map[string]interface{})
 		raw["log"] = logObj
 	}
-	level, _ := logObj["loglevel"].(string)
-	if level == "" || level == "none" || level == "debug" {
-		logObj["loglevel"] = "warning"
-	}
+
 	if modified, err := json.Marshal(raw); err == nil {
 		return modified
 	}
