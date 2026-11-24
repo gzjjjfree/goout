@@ -254,6 +254,15 @@ public class GoOutVpnService extends VpnService {
             builder.setSession("GoOut")
                     .addAddress("10.0.0.2", 24);
 
+            // 让 GoOut 自身应用进程绕过 TUN 接口，避免自身流量进入虚拟网卡
+            try {
+                String pkgName = getPackageName();
+                builder.addDisallowedApplication(pkgName);
+                Log.i(TAG, "startVpn: disallowed package " + pkgName + " from VPN");
+            } catch (Throwable t) {
+                Log.w(TAG, "startVpn: addDisallowedApplication failed, continuing without disallow", t);
+            }
+
             // 仅接管排除私有/保留/环回/组播网段后的公网路由，不指定 8.8.8.8 DNS
             addRoutesExcluding(builder, excludedCidrs);
 
