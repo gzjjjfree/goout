@@ -21,6 +21,14 @@ import (
 	"github.com/gzjjjfree/v5-result/transport/internet"
 )
 
+const (
+	logLevelDebug = iota
+	logLevelInfo
+	logLevelWarning
+	logLevelError
+	logLevelNone
+)
+
 // RegisterSocketProtect 将 Android VpnService 的 socket 保护能力注册到 v5-result 拨号器。
 func RegisterSocketProtect() {
 	internet.SetSocketProtectFunc(service.ProtectSocket)
@@ -31,7 +39,78 @@ var (
 	earlyMu       sync.Mutex
 	globalLogFile *os.File
 	logFileMu     sync.Mutex
+
+	logLevelMu      sync.RWMutex
+	currentLogLevel = logLevelInfo
 )
+
+func parseLogLevel(raw string) int {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "debug":
+		return logLevelDebug
+	case "info":
+		return logLevelInfo
+	case "warning", "warn":
+		return logLevelWarning
+	case "error", "err":
+		return logLevelError
+	case "none", "off", "silent":
+		return logLevelNone
+	default:
+		return logLevelInfo
+	}
+}
+
+func SetLogLevel(levelStr string) {
+	lvl := parseLogLevel(levelStr)
+	logLevelMu.Lock()
+	currentLogLevel = lvl
+	logLevelMu.Unlock()
+}
+
+func GetLogLevel() int {
+	logLevelMu.RLock()
+	defer logLevelMu.RUnlock()
+	return currentLogLevel
+}
+
+func detectMessageLevel(text string) int {
+	lower := strings.ToLower(text)
+	switch {
+	case strings.Contains(text, "[Error]"), strings.Contains(text, "[error]"), strings.Contains(lower, "error"), strings.Contains(lower, "failed"):
+		return logLevelError
+	case strings.Contains(text, "[Warning]"), strings.Contains(text, "[Warn]"), strings.Contains(lower, "warning"), strings.Contains(lower, "warn"):
+		return logLevelWarning
+	case strings.Contains(text, "[Debug]"), strings.Contains(text, "[debug]"):
+		return logLevelDebug
+	case strings.Contains(text, "[Info]"), strings.Contains(text, "[info]"):
+		return logLevelInfo
+	default:
+		return logLevelInfo
+	}
+}
+
+func shouldAllowLog(text string) bool {
+	threshold := GetLogLevel()
+	if threshold == logLevelNone {
+		return false
+	}
+	msgLevel := detectMessageLevel(text)
+	return msgLevel >= threshold
+}
+
+func extractLogLevelFromConfig(configJSON []byte) string {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(configJSON, &raw); err != nil {
+		return "info"
+	}
+	if logObj, ok := raw["log"].(map[string]interface{}); ok {
+		if lvl, ok := logObj["loglevel"].(string); ok && strings.TrimSpace(lvl) != "" {
+			return strings.TrimSpace(lvl)
+		}
+	}
+	return "info"
+}
 
 func init() {
 	setupLogCapture()
@@ -52,7 +131,7 @@ func (w *logWriter) Write(p []byte) (n int, err error) {
 
 	line := string(p)
 	trimmed := strings.TrimSpace(line)
-	if trimmed != "" {
+	if trimmed != "" && shouldAllowLog(trimmed) {
 		earlyMu.Lock()
 		if globalManager != nil {
 			globalManager.addLog("%s", trimmed)
@@ -119,7 +198,7 @@ func (h *uiLogHandler) Handle(msg v2log.Message) {
 		return
 	}
 	text := msg.String()
-	if strings.Contains(text, "[Debug]") {
+	if !shouldAllowLog(text) {
 		return
 	}
 	if h.onLog != nil {
@@ -151,7 +230,7 @@ func GetManager(onLog func(string)) *V2rayManager {
 	earlyMu.Lock()
 	if len(earlyLogs) > 0 {
 		for _, l := range earlyLogs {
-			if !strings.Contains(l, "[Debug]") {
+			if shouldAllowLog(l) {
 				globalManager.addLog("%s", l)
 			}
 		}
@@ -163,7 +242,7 @@ func GetManager(onLog func(string)) *V2rayManager {
 }
 
 func (m *V2rayManager) emitLog(msg string) {
-	if strings.Contains(msg, "[Debug]") {
+	if !shouldAllowLog(msg) {
 		return
 	}
 	m.mu.Lock()
@@ -175,7 +254,7 @@ func (m *V2rayManager) emitLog(msg string) {
 }
 
 func (m *V2rayManager) appendLogLocked(msg string) {
-	if strings.Contains(msg, "[Debug]") {
+	if !shouldAllowLog(msg) {
 		return
 	}
 	limit := m.maxLogs
@@ -190,7 +269,7 @@ func (m *V2rayManager) appendLogLocked(msg string) {
 
 func (m *V2rayManager) addLog(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	if strings.Contains(msg, "[Debug]") {
+	if !shouldAllowLog(msg) {
 		return
 	}
 	m.logMu.Lock()
@@ -203,7 +282,7 @@ func (m *V2rayManager) addLog(format string, args ...any) {
 func (m *V2rayManager) initLogHandler() {
 	m.logHandler = &uiLogHandler{
 		onLog: func(msg string) {
-			if strings.Contains(msg, "[Debug]") {
+			if !shouldAllowLog(msg) {
 				return
 			}
 			m.logMu.Lock()
@@ -242,8 +321,9 @@ func formatConfigForLog(cfgBytes []byte) string {
 
 // Start 在内存中启动 V2Ray 实例（带 Panic Recovery、并发保护与完整配置输出）
 func (m *V2rayManager) Start(configJSON []byte) (err error) {
-	m.emitLog("Starting V2Ray core instance...")
 	RegisterSocketProtect()
+	SetLogLevel(extractLogLevelFromConfig(configJSON))
+	m.emitLog("Starting V2Ray core instance...")
 
 	m.mu.Lock()
 	ch := m.closingCh
@@ -399,6 +479,7 @@ func (m *V2rayManager) CheckConfig(configJSON []byte) (err error) {
 	m.checkMu.Lock()
 	defer m.checkMu.Unlock()
 
+	SetLogLevel(extractLogLevelFromConfig(configJSON))
 	log.Println("Checking V2Ray configuration in memory...")
 	data.EnsureGeositeDat()
 	data.EnsureResultJSON()
@@ -461,6 +542,9 @@ func ensureV2rayLogEnabled(configJSON []byte) []byte {
 	if !ok {
 		logObj = make(map[string]interface{})
 		raw["log"] = logObj
+	}
+	if _, hasLevel := logObj["loglevel"]; !hasLevel {
+		logObj["loglevel"] = "info"
 	}
 
 	if modified, err := json.Marshal(raw); err == nil {
