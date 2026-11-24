@@ -90,7 +90,7 @@ func detectMessageLevel(text string) int {
 	}
 }
 
-func shouldAllowLog(text string) bool {
+func ShouldAllowLog(text string) bool {
 	threshold := GetLogLevel()
 	if threshold == logLevelNone {
 		return false
@@ -131,7 +131,7 @@ func (w *logWriter) Write(p []byte) (n int, err error) {
 
 	line := string(p)
 	trimmed := strings.TrimSpace(line)
-	if trimmed != "" && shouldAllowLog(trimmed) {
+	if trimmed != "" && ShouldAllowLog(trimmed) {
 		earlyMu.Lock()
 		if globalManager != nil {
 			globalManager.addLog("%s", trimmed)
@@ -198,7 +198,7 @@ func (h *uiLogHandler) Handle(msg v2log.Message) {
 		return
 	}
 	text := msg.String()
-	if !shouldAllowLog(text) {
+	if !ShouldAllowLog(text) {
 		return
 	}
 	if h.onLog != nil {
@@ -230,7 +230,7 @@ func GetManager(onLog func(string)) *V2rayManager {
 	earlyMu.Lock()
 	if len(earlyLogs) > 0 {
 		for _, l := range earlyLogs {
-			if shouldAllowLog(l) {
+			if ShouldAllowLog(l) {
 				globalManager.addLog("%s", l)
 			}
 		}
@@ -242,7 +242,7 @@ func GetManager(onLog func(string)) *V2rayManager {
 }
 
 func (m *V2rayManager) emitLog(msg string) {
-	if !shouldAllowLog(msg) {
+	if !ShouldAllowLog(msg) {
 		return
 	}
 	m.mu.Lock()
@@ -254,7 +254,7 @@ func (m *V2rayManager) emitLog(msg string) {
 }
 
 func (m *V2rayManager) appendLogLocked(msg string) {
-	if !shouldAllowLog(msg) {
+	if !ShouldAllowLog(msg) {
 		return
 	}
 	limit := m.maxLogs
@@ -269,7 +269,7 @@ func (m *V2rayManager) appendLogLocked(msg string) {
 
 func (m *V2rayManager) addLog(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	if !shouldAllowLog(msg) {
+	if !ShouldAllowLog(msg) {
 		return
 	}
 	m.logMu.Lock()
@@ -282,7 +282,7 @@ func (m *V2rayManager) addLog(format string, args ...any) {
 func (m *V2rayManager) initLogHandler() {
 	m.logHandler = &uiLogHandler{
 		onLog: func(msg string) {
-			if !shouldAllowLog(msg) {
+			if !ShouldAllowLog(msg) {
 				return
 			}
 			m.logMu.Lock()

@@ -44,12 +44,12 @@ func sanitizeDashboardLine(line string) string {
 
 func appendBoundedLogLines(existing []string, rawMsgs []string) []string {
 	for _, msg := range rawMsgs {
-		if strings.Contains(msg, "[Debug]") {
+		if !core.ShouldAllowLog(msg) {
 			continue
 		}
 		for _, part := range strings.Split(msg, "\n") {
 			line := sanitizeDashboardLine(part)
-			if line == "" || strings.Contains(line, "[Debug]") {
+			if line == "" || !core.ShouldAllowLog(line) {
 				continue
 			}
 			existing = append(existing, line)
@@ -194,7 +194,7 @@ func SetupDashboard(w fyne.Window) {
 
 	var v2rayMgr *core.V2rayManager
 	onLog := func(msg string) {
-		if strings.Contains(msg, "[Debug]") {
+		if !core.ShouldAllowLog(msg) {
 			return
 		}
 		select {
