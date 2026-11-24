@@ -14,10 +14,17 @@ import (
 	"time"
 
 	"github.com/gzjjjfree/goout/data"
+	"github.com/gzjjjfree/goout/service"
 	v2core "github.com/gzjjjfree/v5-result"
 	v2log "github.com/gzjjjfree/v5-result/common/log"
 	_ "github.com/gzjjjfree/v5-result/main/distro/all"
+	"github.com/gzjjjfree/v5-result/transport/internet"
 )
+
+// RegisterSocketProtect 将 Android VpnService 的 socket 保护能力注册到 v5-result 拨号器。
+func RegisterSocketProtect() {
+	internet.SetSocketProtectFunc(service.ProtectSocket)
+}
 
 var (
 	earlyLogs     []string
@@ -128,6 +135,7 @@ var (
 // GetManager 获取全局 V2rayManager 单例
 func GetManager(onLog func(string)) *V2rayManager {
 	managerOnce.Do(func() {
+		RegisterSocketProtect()
 		globalManager = &V2rayManager{
 			maxLogs: 200,
 			onLog:   onLog,
@@ -235,6 +243,7 @@ func formatConfigForLog(cfgBytes []byte) string {
 // Start 在内存中启动 V2Ray 实例（带 Panic Recovery、并发保护与完整配置输出）
 func (m *V2rayManager) Start(configJSON []byte) (err error) {
 	m.emitLog("Starting V2Ray core instance...")
+	RegisterSocketProtect()
 
 	m.mu.Lock()
 	ch := m.closingCh

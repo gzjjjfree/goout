@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	fyne.io/fyne/v2 v2.8.2
-	github.com/gzjjjfree/v5-result v1.0.3
+	github.com/gzjjjfree/v5-result v1.0.4-0.20261124052102-4a6b85d23fbc
 	github.com/xjasonlyu/tun2socks/v2 v2.5.2
 )
 
