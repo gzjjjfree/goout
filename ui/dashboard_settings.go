@@ -73,7 +73,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 	logLevelSelect := widget.NewSelect(logLevelOptions, func(s string) {
 		core.SetLogLevel(s)
 	})
-	logLevelSelect.SetValue(currentLevelStr)
+	logLevelSelect.SetSelected(currentLevelStr)
 	logLevelBox := container.NewVBox(
 		widget.NewLabelWithStyle("日志级别", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		logLevelSelect,
@@ -748,7 +748,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				rawLog = make(map[string]interface{})
 				rawCfg["log"] = rawLog
 			}
-			rawLog["loglevel"] = logLevelSelect.Text
+			rawLog["loglevel"] = logLevelSelect.Selected
 		}
 
 		if inbounds, ok := rawCfg["inbounds"].([]interface{}); ok && len(inbounds) > 0 {
