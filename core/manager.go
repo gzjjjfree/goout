@@ -14,11 +14,9 @@ import (
 	"time"
 
 	"github.com/gzjjjfree/goout/data"
-	"github.com/gzjjjfree/goout/service"
 	v2core "github.com/gzjjjfree/v5-result"
 	v2log "github.com/gzjjjfree/v5-result/common/log"
 	_ "github.com/gzjjjfree/v5-result/main/distro/all"
-	"github.com/gzjjjfree/v5-result/transport/internet"
 )
 
 const (
@@ -28,11 +26,6 @@ const (
 	logLevelError
 	logLevelNone
 )
-
-// RegisterSocketProtect 将 Android VpnService 的 socket 保护能力注册到 v5-result 拨号器。
-func RegisterSocketProtect() {
-	internet.SetSocketProtectFunc(service.ProtectSocket)
-}
 
 var (
 	earlyLogs     []string
