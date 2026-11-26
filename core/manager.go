@@ -39,7 +39,7 @@ var (
 
 // DefaultMinLogLevel 是日志级别的最低下限。即使配置里写了 "none"/"off"，
 // UI 仍至少能看到 warning 级别的可观测性日志，避免日志栏完全静默。
-const DefaultMinLogLevel = logLevelWarning
+const DefaultMinLogLevel = logLevelDebug
 
 func parseLogLevel(raw string) int {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
@@ -54,8 +54,8 @@ func parseLogLevel(raw string) int {
 	case "none", "off", "silent":
 		return logLevelNone
 	default:
-		// 空串 / 非法值一律按最低下限处理，避免误把阈值置为 debug 导致日志泛滥。
-		return DefaultMinLogLevel
+		// 空串 / 非法值一律按 info 级别处理。
+		return logLevelInfo
 	}
 }
 

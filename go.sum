@@ -276,8 +276,6 @@ github.com/grpc-ecosystem/grpc-gateway v1.9.0/go.mod h1:vNeuVxBJEsws4ogUvrchl83t
 github.com/grpc-ecosystem/grpc-gateway v1.9.5/go.mod h1:vNeuVxBJEsws4ogUvrchl83t/GYV9WGTSLVdBhOQFDY=
 github.com/gzjjjfree/v5-result v1.0.3 h1:c42/QcJpmUSg1TW2xRPPF46QARhJF0NTbAthfRqZSDU=
 github.com/gzjjjfree/v5-result v1.0.3/go.mod h1:1/u/M+kjmPI5k4JDWiYhTPYjkSS8SmfWSlV2L55u44c=
-github.com/gzjjjfree/v5-result v1.0.4-0.20261124052102-4a6b85d23fbc h1:2urTHzzo0Iq7eIxwx1pcmgdLGANtuJvE3YTYHvag1TE=
-github.com/gzjjjfree/v5-result v1.0.4-0.20261124052102-4a6b85d23fbc/go.mod h1:1/u/M+kjmPI5k4JDWiYhTPYjkSS8SmfWSlV2L55u44c=
 github.com/hack-pad/go-indexeddb v0.3.2 h1:DTqeJJYc1usa45Q5r52t01KhvlSN02+Oq+tQbSBI91A=
 github.com/hack-pad/go-indexeddb v0.3.2/go.mod h1:QvfTevpDVlkfomY498LhstjwbPW6QC4VC/lxYb0Kom0=
 github.com/hack-pad/safejs v0.1.0 h1:qPS6vjreAqh2amUqj4WNG1zIw7qlRQJ9K10eDKMCnE8=

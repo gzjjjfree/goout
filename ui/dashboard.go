@@ -194,6 +194,15 @@ func SetupDashboard(w fyne.Window) {
 		if !core.ShouldAllowLog(msg) {
 			return
 		}
+		lowerMsg := strings.ToLower(msg)
+		if strings.Contains(lowerMsg, "stopping v2ray") ||
+			strings.Contains(lowerMsg, "instance stopped") ||
+			strings.Contains(lowerMsg, "core closing") ||
+			strings.Contains(lowerMsg, "instance close") ||
+			strings.Contains(lowerMsg, "closed network connection") ||
+			strings.Contains(lowerMsg, "failed to read udp msg") {
+			return
+		}
 		select {
 		case logChan <- msg:
 			scheduleFlush()
@@ -278,8 +287,6 @@ func SetupDashboard(w fyne.Window) {
 					statusLabel.SetText("状态: V2Ray 停止中...")
 				})
 				_ = v2rayMgr.Stop()
-				clearLogQueue()
-				v2rayMgr.ClearLogs()
 				log.Printf("[Dashboard] V2Ray core stopped.")
 			}
 		}()

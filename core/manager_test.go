@@ -85,3 +85,39 @@ func TestV2rayManagerWithDefaultConfigAndGeosite(t *testing.T) {
 		t.Errorf("Expected manager to not be running after stop")
 	}
 }
+
+func TestLogLevelFiltering(t *testing.T) {
+	testCases := []struct {
+		levelStr string
+		msg      string
+		expected bool
+	}{
+		{"debug", "[Debug] test debug", true},
+		{"debug", "[Info] test info", true},
+		{"debug", "[Warning] test warning", true},
+		{"debug", "[Error] test error", true},
+
+		{"info", "[Debug] test debug", false},
+		{"info", "[Info] test info", true},
+		{"info", "[Warning] test warning", true},
+		{"info", "[Error] test error", true},
+
+		{"warning", "[Info] test info", false},
+		{"warning", "[Warning] test warning", true},
+		{"warning", "[Error] test error", true},
+
+		{"error", "[Warning] test warning", false},
+		{"error", "[Error] test error", true},
+
+		{"none", "[Error] test error", false},
+	}
+
+	for _, tc := range testCases {
+		SetLogLevel(tc.levelStr)
+		allowed := ShouldAllowLog(tc.msg)
+		if allowed != tc.expected {
+			t.Errorf("SetLogLevel(%q) for message %q: expected allowed=%v, got %v", tc.levelStr, tc.msg, tc.expected, allowed)
+		}
+	}
+}
+
