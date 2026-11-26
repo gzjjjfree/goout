@@ -61,12 +61,14 @@ jobs:
           path: ~/.cache/android-build-tools
           key: android-build-jars-apktool-2.9.3-bundletool-1.17.0
 
-      - name: Install Fyne CLI
+      - name: Install Fyne CLI & Switch v5-result Branch for Android
         run: |
           export PATH="$HOME/go/bin:$(go env GOPATH)/bin:$PATH"
           if ! command -v fyne >/dev/null 2>&1; then
             go install fyne.io/fyne/v2/cmd/fyne@latest
           fi
+          echo "🔧 切换 Android 平台专用的 v5-result 分支 (android-vpn-protect)..."
+          go get github.com/gzjjjfree/v5-result@android-vpn-protect
 
       - name: Build Android (Native Mode & Inject VpnService)
         env:
