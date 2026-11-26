@@ -5,7 +5,6 @@ package service
 
 import (
 	"fmt"
-	"log"
 	"os/exec"
 	"strings"
 )
@@ -45,7 +44,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		return nil
 	}
 
-	log.Printf("[macOS-SystemProxy] Enabling macOS System Proxy: %s", socksAddr)
+	v.emitLog("[macOS-SystemProxy] Enabling macOS System Proxy: %s", socksAddr)
 
 	isHttp, host, port := CheckHttpInbound(socksAddr)
 
@@ -58,31 +57,31 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		if isHttp {
 			if err = exec.Command("networksetup", "-setwebproxy", svc, host, port).Run(); err != nil {
 				lastErr = err
-				log.Printf("[macOS-SystemProxy] Failed to set web proxy on %s: %v", svc, err)
+				v.emitLog("[macOS-SystemProxy] Failed to set web proxy on %s: %v", svc, err)
 			}
 			if err = exec.Command("networksetup", "-setwebproxystate", svc, "on").Run(); err != nil {
 				lastErr = err
-				log.Printf("[macOS-SystemProxy] Failed to set web proxy state on for %s: %v", svc, err)
+				v.emitLog("[macOS-SystemProxy] Failed to set web proxy state on for %s: %v", svc, err)
 			}
 			if err = exec.Command("networksetup", "-setsecurewebproxy", svc, host, port).Run(); err != nil {
 				lastErr = err
-				log.Printf("[macOS-SystemProxy] Failed to set secure web proxy on %s: %v", svc, err)
+				v.emitLog("[macOS-SystemProxy] Failed to set secure web proxy on %s: %v", svc, err)
 			}
 			if err = exec.Command("networksetup", "-setsecurewebproxystate", svc, "on").Run(); err != nil {
 				lastErr = err
-				log.Printf("[macOS-SystemProxy] Failed to set secure web proxy state on for %s: %v", svc, err)
+				v.emitLog("[macOS-SystemProxy] Failed to set secure web proxy state on for %s: %v", svc, err)
 			}
-			log.Printf("[macOS-SystemProxy] Configured Web/SecureWeb proxy on %s -> %s:%s", svc, host, port)
+			v.emitLog("[macOS-SystemProxy] Configured Web/SecureWeb proxy on %s -> %s:%s", svc, host, port)
 		} else {
 			if err = exec.Command("networksetup", "-setsocksfirewallproxy", svc, host, port).Run(); err != nil {
 				lastErr = err
-				log.Printf("[macOS-SystemProxy] Failed to set socks firewall proxy on %s: %v", svc, err)
+				v.emitLog("[macOS-SystemProxy] Failed to set socks firewall proxy on %s: %v", svc, err)
 			}
 			if err = exec.Command("networksetup", "-setsocksfirewallproxystate", svc, "on").Run(); err != nil {
 				lastErr = err
-				log.Printf("[macOS-SystemProxy] Failed to set socks firewall proxy state on for %s: %v", svc, err)
+				v.emitLog("[macOS-SystemProxy] Failed to set socks firewall proxy state on for %s: %v", svc, err)
 			}
-			log.Printf("[macOS-SystemProxy] Configured SOCKS firewall proxy on %s -> %s:%s", svc, host, port)
+			v.emitLog("[macOS-SystemProxy] Configured SOCKS firewall proxy on %s -> %s:%s", svc, host, port)
 		}
 		if err == nil {
 			successCount++
@@ -90,13 +89,13 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	}
 
 	if len(services) > 0 && successCount == 0 && lastErr != nil {
-		log.Printf("[macOS-SystemProxy] Failed to configure system proxy on any network service: %v", lastErr)
+		v.emitLog("[macOS-SystemProxy] Failed to configure system proxy on any network service: %v", lastErr)
 		return fmt.Errorf("failed to configure macOS system proxy: %w", lastErr)
 	}
 
 	v.socksHost = socksAddr
 	v.active = true
-	log.Println("[macOS-SystemProxy] macOS System Proxy enabled successfully.")
+	v.emitLog("[macOS-SystemProxy] macOS System Proxy enabled successfully.")
 	return nil
 }
 
@@ -109,7 +108,7 @@ func (v *VPNServiceManager) StopVPN() error {
 		return nil
 	}
 
-	log.Println("[macOS-SystemProxy] Disabling macOS System Proxy...")
+	v.emitLog("[macOS-SystemProxy] Disabling macOS System Proxy...")
 
 	services := getActiveNetworkServices()
 	for _, svc := range services {
@@ -119,6 +118,6 @@ func (v *VPNServiceManager) StopVPN() error {
 	}
 
 	v.active = false
-	log.Println("[macOS-SystemProxy] macOS System Proxy disabled successfully.")
+	v.emitLog("[macOS-SystemProxy] macOS System Proxy disabled successfully.")
 	return nil
 }

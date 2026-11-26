@@ -4,6 +4,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -99,4 +100,14 @@ func (v *VPNServiceManager) IsRunning() bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.active
+}
+
+// emitLog 通过 onLog 回调把消息推入 UI 日志栏（若回调存在）。
+// 同时保留 Go 标准 log 输出，确保 goout.log 文件仍记录完整日志。
+func (v *VPNServiceManager) emitLog(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	log.Printf("%s", msg)
+	if v.onLog != nil {
+		v.onLog(msg)
+	}
 }

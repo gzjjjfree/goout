@@ -232,6 +232,14 @@ func (h *uiLogHandler) Handle(msg v2log.Message) {
 		return
 	}
 	text := msg.String()
+	// 检查是否为访问日志 (AccessMessage)
+	if _, ok := msg.(*v2log.AccessMessage); ok {
+		// 访问日志不受普通错误日志等级过滤限制，直接输出
+		if h.onLog != nil {
+			h.onLog(text)
+		}
+		return
+	}
 	if !ShouldAllowLog(text) {
 		return
 	}
@@ -264,9 +272,7 @@ func GetManager(onLog func(string)) *V2rayManager {
 	earlyMu.Lock()
 	if len(earlyLogs) > 0 {
 		for _, l := range earlyLogs {
-			if ShouldAllowLog(l) {
-				globalManager.addLog("%s", l)
-			}
+			globalManager.addLog("%s", l)
 		}
 		earlyLogs = nil
 	}
@@ -287,10 +293,18 @@ func (m *V2rayManager) emitLog(msg string) {
 	}
 }
 
-func (m *V2rayManager) appendLogLocked(msg string) {
+// logAndEmit 统一过滤并写入内存缓存与 UI 回调
+func (m *V2rayManager) logAndEmit(msg string) {
 	if !ShouldAllowLog(msg) {
 		return
 	}
+	m.logMu.Lock()
+	m.appendLogLocked(msg)
+	m.logMu.Unlock()
+	m.emitLog(msg)
+}
+
+func (m *V2rayManager) appendLogLocked(msg string) {
 	limit := m.maxLogs
 	if limit <= 0 {
 		limit = 200
@@ -302,29 +316,12 @@ func (m *V2rayManager) appendLogLocked(msg string) {
 }
 
 func (m *V2rayManager) addLog(format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	if !ShouldAllowLog(msg) {
-		return
-	}
-	m.logMu.Lock()
-	m.appendLogLocked(msg)
-	m.logMu.Unlock()
-
-	m.emitLog(msg)
+	m.logAndEmit(fmt.Sprintf(format, args...))
 }
 
 func (m *V2rayManager) initLogHandler() {
 	m.logHandler = &uiLogHandler{
-		onLog: func(msg string) {
-			if !ShouldAllowLog(msg) {
-				return
-			}
-			m.logMu.Lock()
-			m.appendLogLocked(msg)
-			m.logMu.Unlock()
-
-			m.emitLog(msg)
-		},
+		onLog: m.logAndEmit,
 	}
 	v2log.RegisterHandler(m.logHandler)
 }

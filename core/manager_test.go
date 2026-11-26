@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gzjjjfree/goout/data"
+	v2log "github.com/gzjjjfree/v5-result/common/log"
 )
 
 func TestV2rayManagerLifecycle(t *testing.T) {
@@ -118,6 +119,24 @@ func TestLogLevelFiltering(t *testing.T) {
 		if allowed != tc.expected {
 			t.Errorf("SetLogLevel(%q) for message %q: expected allowed=%v, got %v", tc.levelStr, tc.msg, tc.expected, allowed)
 		}
+	}
+}
+
+func TestAccessLogHandling(t *testing.T) {
+	received := false
+	handler := &uiLogHandler{
+		onLog: func(msg string) {
+			received = true
+		},
+	}
+
+	SetLogLevel("none")
+
+	accessMsg := &v2log.AccessMessage{}
+	handler.Handle(accessMsg)
+
+	if !received {
+		t.Errorf("Expected AccessMessage to be handled and emitted even under 'none' log level")
 	}
 }
 

@@ -201,6 +201,19 @@ func resetFDReadyChannel() {
 	androidMu.Unlock()
 }
 
+// emitLog 通过 activeVPN 的 onLog 回调把消息推入 UI 日志栏（若回调存在）。
+// 同时保留 Go 标准 log 输出，确保 goout.log 文件仍记录完整日志。
+func emitLog(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	log.Printf("%s", msg)
+	androidMu.Lock()
+	v := activeVPN
+	androidMu.Unlock()
+	if v != nil && v.onLog != nil {
+		v.onLog(msg)
+	}
+}
+
 // WaitForAndroidFD 等待系统授权并建立 TUN 接口后传回真实 FD（超时返回 false）。
 func WaitForAndroidFD(timeout time.Duration) (int, bool) {
 	androidMu.Lock()
@@ -225,7 +238,7 @@ func WaitForAndroidFD(timeout time.Duration) (int, bool) {
 
 // triggerAndroidVpnService 通过 JNI 让 Android 宿主启动 GoOutVpnService。
 func triggerAndroidVpnService(socksAddr string) error {
-	log.Printf("[Android-VPN] Calling driver.RunNative to trigger GoOutVpnService, socks=%s", socksAddr)
+	emitLog("[Android-VPN] Calling driver.RunNative to trigger GoOutVpnService, socks=%s", socksAddr)
 	err := driver.RunNative(func(ctx any) error {
 		ac, ok := ctx.(*driver.AndroidContext)
 		if !ok {
@@ -240,7 +253,7 @@ func triggerAndroidVpnService(socksAddr string) error {
 		return nil
 	})
 	if err != nil {
-		log.Printf("[Android-VPN] driver.RunNative failed: %v", err)
+		emitLog("[Android-VPN] driver.RunNative failed: %v", err)
 	}
 	return err
 }
@@ -259,7 +272,7 @@ func triggerAndroidStopVpnService() {
 		return nil
 	})
 	if err != nil {
-		log.Printf("[Android-VPN] triggerAndroidStopVpnService error: %v", err)
+		emitLog("[Android-VPN] triggerAndroidStopVpnService error: %v", err)
 	}
 }
 
@@ -279,7 +292,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	activeVPN = v
 	androidMu.Unlock()
 
-	log.Printf("[Android-VPN] Requesting Android VPN permission/service, socks=%s", socksAddr)
+	v.emitLog("[Android-VPN] Requesting Android VPN permission/service, socks=%s", socksAddr)
 
 	if err := triggerAndroidVpnService(socksAddr); err != nil {
 		androidMu.Lock()
@@ -313,7 +326,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 // 用该 fd 启动(或重启)tun2socks 引擎，从而接管全部流量。
 func updateAndroidFD(fd int) {
 	if fd < 0 {
-		log.Printf("[Android-VPN] updateAndroidFD received invalid fd=%d", fd)
+		emitLog("[Android-VPN] updateAndroidFD received invalid fd=%d", fd)
 		return
 	}
 
@@ -332,7 +345,7 @@ func updateAndroidFD(fd int) {
 	}
 
 	if v == nil {
-		log.Printf("[Android-VPN] updateAndroidFD(fd=%d): no active VPN manager, ignoring", fd)
+		emitLog("[Android-VPN] updateAndroidFD(fd=%d): no active VPN manager, ignoring", fd)
 		return
 	}
 
@@ -341,12 +354,12 @@ func updateAndroidFD(fd int) {
 		socksToUse = "127.0.0.1:10908"
 	}
 
-	log.Printf("[Android-VPN] Real TUN FD=%d received, starting tun2socks (socks=%s)", fd, socksToUse)
+	emitLog("[Android-VPN] Real TUN FD=%d received, starting tun2socks (socks=%s)", fd, socksToUse)
 
 	go func() {
 		jni.StopTun2Socks()
 		if err := jni.StartTun2Socks(fd, v.tunIP, v.gateway, socksToUse); err != nil {
-			log.Printf("[Android-VPN] Failed to start tun2socks with real FD=%d: %v", fd, err)
+			emitLog("[Android-VPN] Failed to start tun2socks with real FD=%d: %v", fd, err)
 			v.mu.Lock()
 			v.active = false
 			v.mu.Unlock()
@@ -355,7 +368,7 @@ func updateAndroidFD(fd int) {
 		v.mu.Lock()
 		v.active = true
 		v.mu.Unlock()
-		log.Printf("[Android-VPN] tun2socks running on real FD=%d", fd)
+		emitLog("[Android-VPN] tun2socks running on real FD=%d", fd)
 	}()
 }
 
@@ -368,7 +381,7 @@ func (v *VPNServiceManager) StopVPN() error {
 		return nil
 	}
 
-	log.Println("[Android-VPN] Stopping Android VpnService TUN tunnel")
+	v.emitLog("[Android-VPN] Stopping Android VpnService TUN tunnel")
 
 	jni.StopTun2Socks()
 	triggerAndroidStopVpnService()
@@ -388,7 +401,7 @@ func (v *VPNServiceManager) StopVPN() error {
 //
 //export StartVPNWithFD
 func StartVPNWithFD(fd int, socksAddr string) {
-	log.Printf("[Android-VPN] Received VpnService FD=%d (socks: %s)", fd, socksAddr)
+	emitLog("[Android-VPN] Received VpnService FD=%d (socks: %s)", fd, socksAddr)
 	if socksAddr != "" {
 		androidMu.Lock()
 		currentSocksAddr = socksAddr
@@ -401,7 +414,7 @@ func StartVPNWithFD(fd int, socksAddr string) {
 //
 //export Java_com_gzjjjfree_goout_GoOutVpnService_nativeStartVPNWithFD
 func Java_com_gzjjjfree_goout_GoOutVpnService_nativeStartVPNWithFD(env uintptr, thiz uintptr, fd int, socksAddrPtr uintptr) {
-	log.Printf("[Android-JNI] nativeStartVPNWithFD called from Android VpnService with FD=%d", fd)
+	emitLog("[Android-JNI] nativeStartVPNWithFD called from Android VpnService with FD=%d", fd)
 	updateAndroidFD(fd)
 }
 
@@ -409,7 +422,7 @@ func Java_com_gzjjjfree_goout_GoOutVpnService_nativeStartVPNWithFD(env uintptr, 
 //
 //export Java_com_gzjjjfree_goout_GoOutVpnService_nativeOnVpnPermissionDenied
 func Java_com_gzjjjfree_goout_GoOutVpnService_nativeOnVpnPermissionDenied(env uintptr, thiz uintptr) {
-	log.Println("[Android-JNI] nativeOnVpnPermissionDenied called")
+	emitLog("[Android-JNI] nativeOnVpnPermissionDenied called")
 	androidMu.Lock()
 	v := activeVPN
 	activeVPN = nil
@@ -442,10 +455,10 @@ func RegisterProtectCallback(fn func(int) bool) {
 func ProtectSocket(fd int) bool {
 	if protectFunc != nil {
 		success := protectFunc(fd)
-		log.Printf("[Android-VPN] ProtectSocket fd=%d, success=%v", fd, success)
+		emitLog("[Android-VPN] ProtectSocket fd=%d, success=%v", fd, success)
 		return success
 	}
-	log.Printf("[Android-VPN] ProtectSocket fd=%d, no protect callback registered", fd)
+	emitLog("[Android-VPN] ProtectSocket fd=%d, no protect callback registered", fd)
 	return false
 }
 
@@ -453,5 +466,5 @@ func ProtectSocket(fd int) bool {
 //
 //export Java_com_gzjjjfree_goout_GoOutVpnService_nativeRegisterProtect
 func Java_com_gzjjjfree_goout_GoOutVpnService_nativeRegisterProtect(env uintptr, thiz uintptr) {
-	log.Println("[Android-JNI] nativeRegisterProtect called")
+	emitLog("[Android-JNI] nativeRegisterProtect called")
 }

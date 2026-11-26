@@ -5,7 +5,6 @@ package service
 
 import (
 	"fmt"
-	"log"
 	"os/exec"
 	"syscall"
 )
@@ -35,7 +34,7 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 		return nil
 	}
 
-	log.Printf("[Windows-SystemProxy] Enabling Windows System Proxy: %s", socksAddr)
+	v.emitLog("[Windows-SystemProxy] Enabling Windows System Proxy: %s", socksAddr)
 
 	proxyServerValue := fmt.Sprintf("socks=%s", socksAddr)
 	isHttp, host, port := CheckHttpInbound(socksAddr)
@@ -52,13 +51,13 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 
 	err := runHiddenCommandRun("powershell", "-Command", psCmd)
 	if err != nil {
-		log.Printf("[Windows-SystemProxy] Failed to set system proxy: %v", err)
+		v.emitLog("[Windows-SystemProxy] Failed to set system proxy: %v", err)
 		return fmt.Errorf("failed to set windows system proxy: %w", err)
 	}
 
 	v.socksHost = socksAddr
 	v.active = true
-	log.Println("[Windows-SystemProxy] Windows System Proxy enabled successfully.")
+	v.emitLog("[Windows-SystemProxy] Windows System Proxy enabled successfully.")
 	return nil
 }
 
@@ -71,15 +70,15 @@ func (v *VPNServiceManager) StopVPN() error {
 		return nil
 	}
 
-	log.Println("[Windows-SystemProxy] Disabling Windows System Proxy...")
+	v.emitLog("[Windows-SystemProxy] Disabling Windows System Proxy...")
 
 	psCmd := "Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name ProxyEnable -Value 0"
 	err := runHiddenCommandRun("powershell", "-Command", psCmd)
 	if err != nil {
-		log.Printf("[Windows-SystemProxy] Failed to disable system proxy: %v", err)
+		v.emitLog("[Windows-SystemProxy] Failed to disable system proxy: %v", err)
 	}
 
 	v.active = false
-	log.Println("[Windows-SystemProxy] Windows System Proxy disabled successfully.")
+	v.emitLog("[Windows-SystemProxy] Windows System Proxy disabled successfully.")
 	return nil
 }
