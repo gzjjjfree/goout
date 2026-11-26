@@ -44,6 +44,10 @@ var (
 	currentLogLevel = logLevelInfo
 )
 
+// DefaultMinLogLevel 是日志级别的最低下限。即使配置里写了 "none"/"off"，
+// UI 仍至少能看到 warning 级别的可观测性日志，避免日志栏完全静默。
+const DefaultMinLogLevel = logLevelWarning
+
 func parseLogLevel(raw string) int {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "debug":
@@ -57,21 +61,58 @@ func parseLogLevel(raw string) int {
 	case "none", "off", "silent":
 		return logLevelNone
 	default:
-		return logLevelInfo
+		// 空串 / 非法值一律按最低下限处理，避免误把阈值置为 debug 导致日志泛滥。
+		return DefaultMinLogLevel
 	}
 }
 
+// clampLogLevel 将任意级别钳位到 [DefaultMinLogLevel, logLevelNone] 区间内。
+func clampLogLevel(lvl int) int {
+	if lvl < DefaultMinLogLevel {
+		return DefaultMinLogLevel
+	}
+	if lvl > logLevelNone {
+		return logLevelNone
+	}
+	return lvl
+}
+
+// SetLogLevel 设置运行时日志级别。空串或非法值会被钳位到 DefaultMinLogLevel。
 func SetLogLevel(levelStr string) {
-	lvl := parseLogLevel(levelStr)
+	lvl := clampLogLevel(parseLogLevel(levelStr))
 	logLevelMu.Lock()
 	currentLogLevel = lvl
 	logLevelMu.Unlock()
 }
 
+// GetLogLevel 返回当前运行时日志级别（整数）。
 func GetLogLevel() int {
 	logLevelMu.RLock()
 	defer logLevelMu.RUnlock()
 	return currentLogLevel
+}
+
+// LogLevelName 将整数级别映射为可读字符串，供 UI 选择器回显。
+func LogLevelName(level int) string {
+	switch level {
+	case logLevelDebug:
+		return "debug"
+	case logLevelInfo:
+		return "info"
+	case logLevelWarning:
+		return "warning"
+	case logLevelError:
+		return "error"
+	case logLevelNone:
+		return "none"
+	default:
+		return "warning"
+	}
+}
+
+// LogLevelOptions 返回 UI 选择器可用的全部级别字符串列表。
+func LogLevelOptions() []string {
+	return []string{"debug", "info", "warning", "error", "none"}
 }
 
 func detectMessageLevel(text string) int {
