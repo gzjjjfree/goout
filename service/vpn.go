@@ -72,6 +72,18 @@ func CheckHttpInbound(socksAddr string) (bool, string, string) {
 	return isHttp, proxyHost, proxyPort
 }
 
+var (
+	serviceLogHookMu     sync.Mutex
+	globalServiceLogHook func(string)
+)
+
+// SetGlobalServiceLogHook 设置全局服务日志钩子（例如接入 core.V2rayManager.addLog 统一过滤与缓存）
+func SetGlobalServiceLogHook(fn func(string)) {
+	serviceLogHookMu.Lock()
+	globalServiceLogHook = fn
+	serviceLogHookMu.Unlock()
+}
+
 // VPNServiceManager handles cross-platform VPN/TUN lifecycle and routing configuration.
 type VPNServiceManager struct {
 	mu        sync.Mutex
@@ -102,12 +114,19 @@ func (v *VPNServiceManager) IsRunning() bool {
 	return v.active
 }
 
-// emitLog 通过 onLog 回调把消息推入 UI 日志栏（若回调存在）。
+// emitLog 通过全局日志钩子或 onLog 回调把消息推入统一日志系统与 UI 日志栏。
 // 同时保留 Go 标准 log 输出，确保 goout.log 文件仍记录完整日志。
 func (v *VPNServiceManager) emitLog(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	log.Printf("%s", msg)
-	if v.onLog != nil {
+
+	serviceLogHookMu.Lock()
+	hook := globalServiceLogHook
+	serviceLogHookMu.Unlock()
+
+	if hook != nil {
+		hook(msg)
+	} else if v.onLog != nil {
 		v.onLog(msg)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gzjjjfree/goout/data"
+	"github.com/gzjjjfree/goout/service"
 	v2core "github.com/gzjjjfree/v5-result"
 	v2log "github.com/gzjjjfree/v5-result/common/log"
 	_ "github.com/gzjjjfree/v5-result/main/distro/all"
@@ -243,6 +244,9 @@ func GetManager(onLog func(string)) *V2rayManager {
 			onLog:   onLog,
 		}
 		globalManager.initLogHandler()
+		service.SetGlobalServiceLogHook(func(msg string) {
+			globalManager.addLog("%s", msg)
+		})
 	})
 	if onLog != nil {
 		globalManager.mu.Lock()
