@@ -24,7 +24,7 @@ func getActiveNetworkServices() []string {
 	var services []string
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "An asterisk") {
+		if line == "" || strings.HasPrefix(line, "An asterisk") || strings.HasPrefix(line, "*") {
 			continue
 		}
 		services = append(services, line)
@@ -82,6 +82,14 @@ func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 				v.emitLog("[macOS-SystemProxy] Failed to set socks firewall proxy state on for %s: %v", svc, err)
 			}
 			v.emitLog("[macOS-SystemProxy] Configured SOCKS firewall proxy on %s -> %s:%s", svc, host, port)
+		}
+
+		// Set proxy bypass domains (mirroring Windows ProxyOverride: localhost, 127.*, 10.*, 172.16.*, 192.168.*, *.local)
+		bypassArgs := append([]string{"-setproxybypassdomains", svc}, "127.0.0.1", "localhost", "10.*", "172.16.*", "192.168.*", "*.local")
+		if err = exec.Command("networksetup", bypassArgs...).Run(); err != nil {
+			v.emitLog("[macOS-SystemProxy] Failed to set proxy bypass domains on %s: %v", svc, err)
+		} else {
+			v.emitLog("[macOS-SystemProxy] Configured proxy bypass domains on %s", svc)
 		}
 		if err == nil {
 			successCount++
