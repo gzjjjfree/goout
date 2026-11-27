@@ -125,25 +125,11 @@ func detectMessageLevel(text string) int {
 }
 
 func ShouldAllowLog(text string) bool {
-	threshold := GetLogLevel()
-	if threshold == logLevelNone {
-		return false
-	}
-	msgLevel := detectMessageLevel(text)
-	return msgLevel >= threshold
+	return true
 }
 
 func extractLogLevelFromConfig(configJSON []byte) string {
-	var raw map[string]interface{}
-	if err := json.Unmarshal(configJSON, &raw); err != nil {
-		return "info"
-	}
-	if logObj, ok := raw["log"].(map[string]interface{}); ok {
-		if lvl, ok := logObj["loglevel"].(string); ok && strings.TrimSpace(lvl) != "" {
-			return strings.TrimSpace(lvl)
-		}
-	}
-	return "info"
+	return "none"
 }
 
 func init() {
@@ -231,20 +217,8 @@ func (h *uiLogHandler) Handle(msg v2log.Message) {
 	if msg == nil {
 		return
 	}
-	text := msg.String()
-	// 检查是否为访问日志 (AccessMessage)
-	if _, ok := msg.(*v2log.AccessMessage); ok {
-		// 访问日志不受普通错误日志等级过滤限制，直接输出
-		if h.onLog != nil {
-			h.onLog(text)
-		}
-		return
-	}
-	if !ShouldAllowLog(text) {
-		return
-	}
 	if h.onLog != nil {
-		h.onLog(text)
+		h.onLog(msg.String())
 	}
 }
 
@@ -272,7 +246,7 @@ func GetManager(onLog func(string)) *V2rayManager {
 	earlyMu.Lock()
 	if len(earlyLogs) > 0 {
 		for _, l := range earlyLogs {
-			globalManager.addLog("%s", l)
+			globalManager.addLogUnfiltered("%s", l)
 		}
 		earlyLogs = nil
 	}
@@ -293,6 +267,15 @@ func (m *V2rayManager) emitLog(msg string) {
 	}
 }
 
+func (m *V2rayManager) emitLogUnfiltered(msg string) {
+	m.mu.Lock()
+	fn := m.onLog
+	m.mu.Unlock()
+	if fn != nil {
+		fn(msg)
+	}
+}
+
 // logAndEmit 统一过滤并写入内存缓存与 UI 回调
 func (m *V2rayManager) logAndEmit(msg string) {
 	if !ShouldAllowLog(msg) {
@@ -302,6 +285,13 @@ func (m *V2rayManager) logAndEmit(msg string) {
 	m.appendLogLocked(msg)
 	m.logMu.Unlock()
 	m.emitLog(msg)
+}
+
+func (m *V2rayManager) logAndEmitUnfiltered(msg string) {
+	m.logMu.Lock()
+	m.appendLogLocked(msg)
+	m.logMu.Unlock()
+	m.emitLogUnfiltered(msg)
 }
 
 func (m *V2rayManager) appendLogLocked(msg string) {
@@ -317,6 +307,10 @@ func (m *V2rayManager) appendLogLocked(msg string) {
 
 func (m *V2rayManager) addLog(format string, args ...any) {
 	m.logAndEmit(fmt.Sprintf(format, args...))
+}
+
+func (m *V2rayManager) addLogUnfiltered(format string, args ...any) {
+	m.logAndEmitUnfiltered(fmt.Sprintf(format, args...))
 }
 
 func (m *V2rayManager) initLogHandler() {
@@ -574,9 +568,7 @@ func ensureV2rayLogEnabled(configJSON []byte) []byte {
 		logObj = make(map[string]interface{})
 		raw["log"] = logObj
 	}
-	if _, hasLevel := logObj["loglevel"]; !hasLevel {
-		logObj["loglevel"] = "info"
-	}
+	logObj["loglevel"] = "none"
 
 	if modified, err := json.Marshal(raw); err == nil {
 		return modified

@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/gzjjjfree/goout/data"
-	v2log "github.com/gzjjjfree/v5-result/common/log"
 )
 
 func TestV2rayManagerLifecycle(t *testing.T) {
@@ -88,55 +87,19 @@ func TestV2rayManagerWithDefaultConfigAndGeosite(t *testing.T) {
 }
 
 func TestLogLevelFiltering(t *testing.T) {
-	testCases := []struct {
-		levelStr string
-		msg      string
-		expected bool
-	}{
-		{"debug", "[Debug] test debug", true},
-		{"debug", "[Info] test info", true},
-		{"debug", "[Warning] test warning", true},
-		{"debug", "[Error] test error", true},
-
-		{"info", "[Debug] test debug", false},
-		{"info", "[Info] test info", true},
-		{"info", "[Warning] test warning", true},
-		{"info", "[Error] test error", true},
-
-		{"warning", "[Info] test info", false},
-		{"warning", "[Warning] test warning", true},
-		{"warning", "[Error] test error", true},
-
-		{"error", "[Warning] test warning", false},
-		{"error", "[Error] test error", true},
-
-		{"none", "[Error] test error", false},
+	testCases := []string{
+		"[Debug] test debug",
+		"[Info] test info",
+		"[Warning] test warning",
+		"[Error] test error",
 	}
 
-	for _, tc := range testCases {
-		SetLogLevel(tc.levelStr)
-		allowed := ShouldAllowLog(tc.msg)
-		if allowed != tc.expected {
-			t.Errorf("SetLogLevel(%q) for message %q: expected allowed=%v, got %v", tc.levelStr, tc.msg, tc.expected, allowed)
+	for _, msg := range testCases {
+		SetLogLevel("none")
+		allowed := ShouldAllowLog(msg)
+		if !allowed {
+			t.Errorf("Expected message %q to be allowed when log level is hardcoded as 'none' and level is not considered, got %v", msg, allowed)
 		}
-	}
-}
-
-func TestAccessLogHandling(t *testing.T) {
-	received := false
-	handler := &uiLogHandler{
-		onLog: func(msg string) {
-			received = true
-		},
-	}
-
-	SetLogLevel("none")
-
-	accessMsg := &v2log.AccessMessage{}
-	handler.Handle(accessMsg)
-
-	if !received {
-		t.Errorf("Expected AccessMessage to be handled and emitted even under 'none' log level")
 	}
 }
 

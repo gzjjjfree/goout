@@ -226,6 +226,7 @@ func SetupDashboard(w fyne.Window) {
 	statusLabel := widget.NewLabel("状态: 已停止")
 	var v2rayBtn *widget.Button
 	var vpnBtn *widget.Button
+	var configBtn *widget.Button
 
 	updateStatus := func() {
 		v2Run := v2rayMgr.IsRunning()
@@ -234,18 +235,30 @@ func SetupDashboard(w fyne.Window) {
 			statusLabel.SetText("状态: V2Ray 运行中 | VPN 运行中")
 			v2rayBtn.SetText("停止 V2Ray 核心")
 			vpnBtn.SetText("停止 VPN")
+			if configBtn != nil {
+				configBtn.Disable()
+			}
 		} else if v2Run {
 			statusLabel.SetText("状态: V2Ray 运行中 | VPN 已停止")
 			v2rayBtn.SetText("停止 V2Ray 核心")
 			vpnBtn.SetText("启动 VPN")
+			if configBtn != nil {
+				configBtn.Disable()
+			}
 		} else if vpnRun {
 			statusLabel.SetText("状态: V2Ray 已停止 | VPN 运行中")
 			v2rayBtn.SetText("启动 V2Ray 核心")
 			vpnBtn.SetText("停止 VPN")
+			if configBtn != nil {
+				configBtn.Enable()
+			}
 		} else {
 			statusLabel.SetText("状态: 已停止")
 			v2rayBtn.SetText("启动 V2Ray 核心")
 			vpnBtn.SetText("启动 VPN")
+			if configBtn != nil {
+				configBtn.Enable()
+			}
 		}
 	}
 
@@ -342,11 +355,15 @@ func SetupDashboard(w fyne.Window) {
 		}()
 	})
 
-	updateStatus()
-
-	configBtn := widget.NewButton("设置", func() {
+	configBtn = widget.NewButton("设置", func() {
+		if v2rayMgr.IsRunning() {
+			dialog.ShowInformation("提示", "V2Ray 运行中，无法打开设置", w)
+			return
+		}
 		showSettingsDialog(w, cfg, vpnMgr)
 	})
+
+	updateStatus()
 
 	clearBtn := widget.NewButton("清除日志", func() {
 		clearLogQueue()

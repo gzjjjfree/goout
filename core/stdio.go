@@ -50,10 +50,19 @@ func drainPipe(r *os.File) {
 }
 
 func forwardToLog(line string) {
+	logFileMu.Lock()
+	if globalLogFile != nil {
+		_, _ = globalLogFile.WriteString(line + "\n")
+	}
+	logFileMu.Unlock()
+
 	earlyMu.Lock()
 	if globalManager != nil {
-		globalManager.addLog("%s", line)
+		globalManager.addLogUnfiltered("%s", line)
 	} else {
+		if len(earlyLogs) >= 500 {
+			earlyLogs = earlyLogs[len(earlyLogs)-499:]
+		}
 		earlyLogs = append(earlyLogs, line)
 	}
 	earlyMu.Unlock()
