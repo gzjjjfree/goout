@@ -217,8 +217,15 @@ func (h *uiLogHandler) Handle(msg v2log.Message) {
 	if msg == nil {
 		return
 	}
+	// 如果只想保留访问日志，可以判断其具体类型或字符串特征
+	text := msg.String()
+	// 例如：只允许包含 accepted 或 rejected 的访问日志，或者非 GeneralMessage
+	if _, ok := msg.(*v2log.GeneralMessage); ok {
+		return // 过滤掉所有通用诊断日志 ([Info], [Warning] 等)
+	}
+
 	if h.onLog != nil {
-		h.onLog(msg.String())
+		h.onLog(text)
 	}
 }
 

@@ -73,6 +73,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 	logLevelSelect := widget.NewSelect(logLevelOptions, func(s string) {
 		core.SetLogLevel(s)
 	})
+	logLevelSelect.PlaceHolder = ""
 	logLevelSelect.SetSelected(currentLevelStr)
 	logLevelBox := container.NewVBox(
 		widget.NewLabelWithStyle("日志级别", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
