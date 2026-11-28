@@ -389,6 +389,27 @@ func SetupDashboard(w fyne.Window) {
 
 	updateStatus()
 
+	if runtime.GOOS == "android" {
+		vpnBtn.Disable()
+		go func() {
+			_, _, socksPort, err := resolveSharedV2RayConfig(cfg)
+			if err == nil {
+				_ = data.SaveConfig("config_save.json", cfg)
+				if !vpnMgr.IsRunning() {
+					socksAddr := fmt.Sprintf("127.0.0.1:%d", socksPort)
+					_ = vpnMgr.StartVPN(socksAddr)
+				}
+				//if !v2rayMgr.IsRunning() {
+				//	_ = v2rayMgr.Start(configBytes)
+				//}
+				fyne.Do(func() {
+					updateStatus()
+					vpnBtn.Disable()
+				})
+			}
+		}()
+	}
+
 	clearBtn := widget.NewButton("清除日志", func() {
 		clearLogQueue()
 		v2rayMgr.ClearLogs()
