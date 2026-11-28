@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -205,15 +206,15 @@ func SetupDashboard(w fyne.Window) {
 		if !core.ShouldAllowLog(msg) {
 			return
 		}
-		lowerMsg := strings.ToLower(msg)
-		if strings.Contains(lowerMsg, "stopping v2ray") ||
-			strings.Contains(lowerMsg, "instance stopped") ||
-			strings.Contains(lowerMsg, "core closing") ||
-			strings.Contains(lowerMsg, "instance close") ||
-			strings.Contains(lowerMsg, "closed network connection") ||
-			strings.Contains(lowerMsg, "failed to read udp msg") {
-			return
-		}
+		// lowerMsg := strings.ToLower(msg)
+		// if strings.Contains(lowerMsg, "stopping v2ray") ||
+		// 	strings.Contains(lowerMsg, "instance stopped") ||
+		// 	strings.Contains(lowerMsg, "core closing") ||
+		// 	strings.Contains(lowerMsg, "instance close") ||
+		// 	strings.Contains(lowerMsg, "closed network connection") ||
+		// 	strings.Contains(lowerMsg, "failed to read udp msg") {
+		// 	return
+		// }
 		select {
 		case logChan <- msg:
 			scheduleFlush()
@@ -246,6 +247,9 @@ func SetupDashboard(w fyne.Window) {
 			statusLabel.SetText("状态: V2Ray 运行中 | VPN 运行中")
 			v2rayBtn.SetText("停止 V2Ray 核心")
 			vpnBtn.SetText("停止 VPN")
+			if runtime.GOOS == "android" {
+				vpnBtn.Disable()
+			}
 			if configBtn != nil {
 				configBtn.Disable()
 			}
@@ -253,6 +257,9 @@ func SetupDashboard(w fyne.Window) {
 			statusLabel.SetText("状态: V2Ray 运行中 | VPN 已停止")
 			v2rayBtn.SetText("停止 V2Ray 核心")
 			vpnBtn.SetText("启动 VPN")
+			if runtime.GOOS == "android" {
+				vpnBtn.Disable()
+			}
 			if configBtn != nil {
 				configBtn.Disable()
 			}
@@ -260,6 +267,9 @@ func SetupDashboard(w fyne.Window) {
 			statusLabel.SetText("状态: V2Ray 已停止 | VPN 运行中")
 			v2rayBtn.SetText("启动 V2Ray 核心")
 			vpnBtn.SetText("停止 VPN")
+			if runtime.GOOS == "android" {
+				vpnBtn.Disable()
+			}
 			if configBtn != nil {
 				configBtn.Enable()
 			}
@@ -267,6 +277,9 @@ func SetupDashboard(w fyne.Window) {
 			statusLabel.SetText("状态: 已停止")
 			v2rayBtn.SetText("启动 V2Ray 核心")
 			vpnBtn.SetText("启动 VPN")
+			if runtime.GOOS == "android" {
+				vpnBtn.Disable()
+			}
 			if configBtn != nil {
 				configBtn.Enable()
 			}

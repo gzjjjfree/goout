@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -858,9 +859,13 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				if d != nil {
 					d.Hide()
 				}
+				successMsg := "配置保存成功，V2Ray 核心检查通过！"
+				if runtime.GOOS == "android" {
+					successMsg = "配置保存成功，监听端口已修改，请重启应用后生效！"
+				}
 				showConfigCheckResultDialog(
 					w,
-					"配置保存成功，V2Ray 核心检查通过！",
+					successMsg,
 					string(cfgBytes),
 				)
 			})
