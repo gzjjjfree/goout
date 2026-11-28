@@ -425,10 +425,38 @@ func SetupDashboard(w fyne.Window) {
 		appVersion = Version
 	}
 
+	userInteracted := false
+	lineSelect := widget.NewSelect([]string{"移动线路", "联通线路"}, func(s string) {
+		if s == "" || !userInteracted {
+			return
+		}
+		cfg.LineSelection = s
+		configPath := strings.TrimSpace(cfg.V2RayConfigPath)
+		if configPath == "" {
+			configPath = "goout.json"
+		}
+		_ = data.SaveConfig(configPath, cfg)
+		_ = data.SetLineSelectionAndWriteResult(s)
+
+		dialog.ShowInformation("提示", "已切换线路为「"+s+"」，必须重启 v2ray 才能生效！", w)
+		// infoLabel := widget.NewLabel("已切换线路为「" + s + "」，必须重启 v2ray 才能生效！")
+		// infoLabel.Wrapping = fyne.TextWrapWord
+		// dInfo := dialog.NewCustom("提示", "确定", container.NewVBox(infoLabel), w)
+		// dInfo.Resize(fyne.NewSize(380, 150))
+		// dInfo.Show()
+	})
+	if cfg.LineSelection == "联通线路" {
+		lineSelect.SetSelected("联通线路")
+	} else {
+		lineSelect.SetSelected("移动线路")
+	}
+	userInteracted = true
+
 	topContent := container.NewVBox(
 		widget.NewLabelWithStyle(fmt.Sprintf("GoOut 控制面板 v%s (内存版)", appVersion), fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		statusLabel,
 		container.NewHBox(v2rayBtn, vpnBtn, configBtn),
+		container.NewHBox(widget.NewLabel("线路选择:"), lineSelect),
 		widget.NewSeparator(),
 		container.NewBorder(nil, nil, widget.NewLabel("日志:"), clearBtn, nil),
 	)

@@ -20,6 +20,9 @@ var embeddedGeosite []byte
 //go:embed result.json
 var embeddedResultJSON []byte
 
+//go:embed cu/result.json
+var embeddedCuResultJSON []byte
+
 // getTargetDir 获取与运行文件或工作目录相同的目标目录（与 geosite.dat 同一目录）
 func getTargetDir() string {
 	targetDir := ""
@@ -64,17 +67,38 @@ func EnsureGeositeDat() {
 
 // EnsureResultJSON 确保 result.json 在运行时写入到与运行文件同目录下的 result/result.json 中
 func EnsureResultJSON() {
-	if len(embeddedResultJSON) == 0 {
-		return
-	}
-
 	targetDir := getTargetDir()
-
-	resultDir := filepath.Join(targetDir, "result")
-	if err := os.MkdirAll(resultDir, 0755); err == nil {
-		p := filepath.Join(resultDir, "result.json")
-		_ = os.WriteFile(p, embeddedResultJSON, 0644)
+	lineSelection := "移动线路"
+	configPath := filepath.Join(targetDir, "goout.json")
+	if content, err := os.ReadFile(configPath); err == nil {
+		var raw map[string]interface{}
+		if json.Unmarshal(content, &raw) == nil {
+			if ls, ok := raw["line_selection"].(string); ok && ls != "" {
+				lineSelection = ls
+			}
+		}
 	}
+	_ = SetLineSelectionAndWriteResult(lineSelection)
+}
+
+func SetLineSelectionAndWriteResult(lineSelection string) error {
+	targetDir := getTargetDir()
+	resultDir := filepath.Join(targetDir, "result")
+	if err := os.MkdirAll(resultDir, 0755); err != nil {
+		return err
+	}
+	p := filepath.Join(resultDir, "result.json")
+	var dataBytes []byte
+	if lineSelection == "联通线路" {
+		if len(embeddedCuResultJSON) > 0 {
+			dataBytes = embeddedCuResultJSON
+		} else {
+			dataBytes = embeddedResultJSON
+		}
+	} else {
+		dataBytes = embeddedResultJSON
+	}
+	return os.WriteFile(p, dataBytes, 0644)
 }
 
 type Config struct {
@@ -85,6 +109,7 @@ type Config struct {
 	ServerPort      int      `json:"server_port"`
 	Subscriptions   []string `json:"subscriptions"`
 	RoutingBypass   []string `json:"routing_bypass"`
+	LineSelection   string   `json:"line_selection"`
 }
 
 func getWritableDir(subPath ...string) string {
@@ -154,6 +179,7 @@ func DefaultConfig() (*Config, error) {
 		ServerPort:      10809,
 		Subscriptions:   []string{},
 		RoutingBypass:   []string{"10.0.0.0/8", "192.168.0.0/16"},
+		LineSelection:   "移动线路",
 	}, nil
 }
 
