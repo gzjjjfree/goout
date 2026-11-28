@@ -10,6 +10,7 @@ import (
 )
 
 // StartVPN initiates cross-platform TUN simulation/stub for non-Windows/non-Android OS.
+// Linux 分支明确为 stub：无真实 TUN fd 来源，StartTun2Socks 会返回 stub 错误。
 func (v *VPNServiceManager) StartVPN(socksAddr string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()

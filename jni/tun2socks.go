@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -43,18 +42,16 @@ func StartTun2Socks(fd int, tunAddr, gateway, socksServer string) error {
 
 	var deviceStr string
 	if fd >= 0 {
+		// 真实 fd（Android VpnService 提供）：直接用 fd:// 启动引擎。
 		deviceStr = fmt.Sprintf("fd://%d", fd)
 	} else if runtime.GOOS == "windows" {
 		deviceStr = "tun://GoOutTUN"
+	} else if runtime.GOOS == "linux" {
+		// Linux 分支：当前没有真实 TUN fd 来源（无 VpnService/TUN 接口），
+		// 明确 stub 语义——不伪装成真实 TUN，直接返回错误，避免引擎在错误设备上 panic。
+		return fmt.Errorf("linux tun2socks stub: no real TUN fd available (fd=%d); requires a real TUN fd source (e.g. VpnService/TUN interface)", fd)
 	} else {
 		deviceStr = "tun://tun0"
-		if runtime.GOOS == "linux" {
-			if f, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0); err != nil {
-				return fmt.Errorf("failed to open /dev/net/tun (requires root privileges or tun kernel module): %w", err)
-			} else {
-				_ = f.Close()
-			}
-		}
 	}
 
 	proxyURL := socksServer

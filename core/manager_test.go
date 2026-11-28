@@ -45,7 +45,10 @@ func TestV2rayManagerLifecycle(t *testing.T) {
 }
 
 func TestV2rayManagerWithDefaultConfigAndGeosite(t *testing.T) {
-	cfg := data.DefaultConfig()
+	cfg, err := data.DefaultConfig()
+	if err != nil {
+		t.Fatalf("failed to create default config: %v", err)
+	}
 	_ = os.WriteFile(cfg.V2RayConfigPath, data.GetDefaultConfigBytes(), 0644)
 
 	configBytes, err := os.ReadFile(cfg.V2RayConfigPath)

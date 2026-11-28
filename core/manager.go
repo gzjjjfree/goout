@@ -38,8 +38,7 @@ var (
 	currentLogLevel = logLevelInfo
 )
 
-// DefaultMinLogLevel 是日志级别的最低下限。即使配置里写了 "none"/"off"，
-// UI 仍至少能看到 warning 级别的可观测性日志，避免日志栏完全静默。
+// DefaultMinLogLevel 是允许的最小日志级别，低于该级别的日志会被钳位到该值。
 const DefaultMinLogLevel = logLevelDebug
 
 func parseLogLevel(raw string) int {
@@ -133,9 +132,6 @@ func extractLogLevelFromConfig(configJSON []byte) string {
 	return "none"
 }
 
-func init() {
-	setupLogCapture()
-}
 
 type logWriter struct {
 	file *os.File
@@ -168,7 +164,7 @@ func (w *logWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func setupLogCapture() {
+func SetupLogCapture() {
 	logFile, err := os.OpenFile("goout.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	var writer io.Writer
 	if err == nil {

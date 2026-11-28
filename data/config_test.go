@@ -17,7 +17,10 @@ func TestConfigSaveAndLoad(t *testing.T) {
 
 	configPath := filepath.Join(tmpDir, "config.json")
 
-	cfg := DefaultConfig()
+	cfg, err := DefaultConfig()
+	if err != nil {
+		t.Fatalf("failed to create default config: %v", err)
+	}
 	cfg.ServerAddress = "test.proxy.com"
 	cfg.ServerPort = 9999
 

@@ -67,19 +67,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 	tunIPEntry := widget.NewEntry()
 	tunIPEntry.SetText(cfg.TunIP)
 
-	// 日志级别选择器：让用户动态调整运行时日志级别，立即生效并写回配置。
-	logLevelOptions := core.LogLevelOptions()
-	currentLevelStr := core.LogLevelName(core.GetLogLevel())
-	logLevelSelect := widget.NewSelect(logLevelOptions, func(s string) {
-		core.SetLogLevel(s)
-	})
-	logLevelSelect.PlaceHolder = ""
-	logLevelSelect.SetSelected(currentLevelStr)
-	logLevelBox := container.NewVBox(
-		widget.NewLabelWithStyle("日志级别", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		logLevelSelect,
-	)
-
 	mainForm := &widget.Form{
 		Items: []*widget.FormItem{
 			{Text: "TUN IP", Widget: tunIPEntry},
@@ -88,7 +75,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 	mainTab := container.NewVBox(
 		widget.NewLabelWithStyle("基本连接参数设置", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		mainForm,
-		logLevelBox,
 	)
 
 	inboundsContainer := container.NewVBox()
@@ -594,6 +580,20 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				balancerTagEntry.SetText(bt)
 			}
 
+			var portStr string
+			if pVal, exists := rMap["port"]; exists && pVal != nil {
+				switch p := pVal.(type) {
+				case float64:
+					portStr = strconv.Itoa(int(p))
+				case int:
+					portStr = strconv.Itoa(p)
+				case string:
+					portStr = p
+				default:
+					portStr = fmt.Sprintf("%v", pVal)
+				}
+			}
+
 			var inboundTagsStr string
 			if its, ok := rMap["inboundTag"].([]interface{}); ok {
 				var strs []string
@@ -635,6 +635,8 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 
 			itEntry := widget.NewEntry()
 			itEntry.SetText(inboundTagsStr)
+			portEntry := widget.NewEntry()
+			portEntry.SetText(portStr)
 			domEntry := widget.NewMultiLineEntry()
 			domEntry.SetText(domainStr)
 			ipEntry := widget.NewMultiLineEntry()
@@ -652,6 +654,18 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 
 			outboundTagEntry.OnChanged = func(s string) { rMap["outboundTag"] = s }
 			balancerTagEntry.OnChanged = func(s string) { rMap["balancerTag"] = s }
+			portEntry.OnChanged = func(s string) {
+				trimmed := strings.TrimSpace(s)
+				if trimmed == "" {
+					delete(rMap, "port")
+					return
+				}
+				if pi, err := strconv.Atoi(trimmed); err == nil {
+					rMap["port"] = pi
+				} else {
+					rMap["port"] = trimmed
+				}
+			}
 			itEntry.OnChanged = func(s string) {
 				parts := strings.Split(s, ",")
 				var clean []interface{}
@@ -691,6 +705,7 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 				widget.NewForm(
 					&widget.FormItem{Text: "OutboundTag", Widget: outboundTagEntry},
 					&widget.FormItem{Text: "BalancerTag", Widget: balancerTagEntry},
+					&widget.FormItem{Text: "Port", Widget: portEntry},
 					&widget.FormItem{Text: "InboundTag(逗号)", Widget: itEntry},
 					&widget.FormItem{Text: "Domain(每行一个)", Widget: domEntry},
 					&widget.FormItem{Text: "IP(每行一个)", Widget: ipEntry},
@@ -741,16 +756,6 @@ func showSettingsDialog(w fyne.Window, cfg *data.Config, vpnMgr *service.VPNServ
 
 		cfg.TunIP = tunIPEntry.Text
 		vpnMgr.SetTunIP(cfg.TunIP)
-
-		// 将当前选中的日志级别写回配置，确保重启后仍生效。
-		if logLevelSelect != nil {
-			rawLog, _ := rawCfg["log"].(map[string]interface{})
-			if rawLog == nil {
-				rawLog = make(map[string]interface{})
-				rawCfg["log"] = rawLog
-			}
-			rawLog["loglevel"] = logLevelSelect.Selected
-		}
 
 		if inbounds, ok := rawCfg["inbounds"].([]interface{}); ok && len(inbounds) > 0 {
 			for _, ib := range inbounds {

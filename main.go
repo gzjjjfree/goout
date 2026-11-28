@@ -13,6 +13,7 @@ import (
 func main() {
 	// 1. 先重定向 home + chdir（这样下面打开日志时 CWD 已是可写目录）
 	data.SetupV2rayHome()
+	core.SetupLogCapture()
 
 	defer core.CloseLog()
 

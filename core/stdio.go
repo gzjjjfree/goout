@@ -50,20 +50,7 @@ func drainPipe(r *os.File) {
 }
 
 func forwardToLog(line string) {
-	logFileMu.Lock()
-	if globalLogFile != nil {
-		_, _ = globalLogFile.WriteString(line + "\n")
-	}
-	logFileMu.Unlock()
-
-	earlyMu.Lock()
-	if globalManager != nil {
-		globalManager.addLogUnfiltered("%s", line)
-	} else {
-		if len(earlyLogs) >= 500 {
-			earlyLogs = earlyLogs[len(earlyLogs)-499:]
-		}
-		earlyLogs = append(earlyLogs, line)
-	}
-	earlyMu.Unlock()
+	// 统一走 log.SetOutput 的 logWriter 路径：它负责写入 goout.log 与 UI 分发，
+	// 避免 drainPipe 与 logWriter 并行写同一文件造成重复/竞争。
+	log.Print(line + "\n")
 }

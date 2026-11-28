@@ -455,7 +455,7 @@ func RegisterProtectCallback(fn func(int) bool) {
 func ProtectSocket(fd int) bool {
 	if protectFunc != nil {
 		success := protectFunc(fd)
-		emitLog("[Android-VPN] ProtectSocket fd=%d, success=%v", fd, success)
+		// emitLog("[Android-VPN] ProtectSocket fd=%d, success=%v", fd, success)
 		return success
 	}
 	emitLog("[Android-VPN] ProtectSocket fd=%d, no protect callback registered", fd)

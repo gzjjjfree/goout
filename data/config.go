@@ -4,6 +4,7 @@ package data
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -135,12 +136,14 @@ func getWritableDir(subPath ...string) string {
 	return fallback
 }
 
-func DefaultConfig() *Config {
+func DefaultConfig() (*Config, error) {
 	configDir := getTargetDir()
 	configPath := filepath.Join(configDir, "goout.json")
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		_ = os.WriteFile(configPath, defaultConfigFile, 0644)
+		if err := os.WriteFile(configPath, defaultConfigFile, 0644); err != nil {
+			return nil, fmt.Errorf("failed to write default config %s: %w", configPath, err)
+		}
 	}
 
 	return &Config{
@@ -151,7 +154,7 @@ func DefaultConfig() *Config {
 		ServerPort:      10809,
 		Subscriptions:   []string{},
 		RoutingBypass:   []string{"10.0.0.0/8", "192.168.0.0/16"},
-	}
+	}, nil
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -160,9 +163,16 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return DefaultConfig(), err
+		cfg, cfgErr := DefaultConfig()
+		if cfgErr != nil {
+			return nil, fmt.Errorf("failed to load config %s: %w", path, err)
+		}
+		return cfg, err
 	}
-	cfg := DefaultConfig()
+	cfg, cfgErr := DefaultConfig()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return cfg, err
 	}

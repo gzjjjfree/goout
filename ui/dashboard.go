@@ -109,7 +109,18 @@ func SetupDashboard(w fyne.Window) {
 	if err != nil {
 		cfg, err = data.LoadConfig("config.json")
 		if err != nil {
-			cfg = data.DefaultConfig()
+			cfg, err = data.DefaultConfig()
+			if err != nil {
+				cfg = &data.Config{
+					V2RayConfigPath: "goout.json",
+					SocksPort:       10808,
+					TunIP:           "10.0.0.2",
+					ServerAddress:   "127.0.0.1",
+					ServerPort:      10809,
+					Subscriptions:   []string{},
+					RoutingBypass:   []string{"10.0.0.0/8", "192.168.0.0/16"},
+				}
+			}
 		}
 	}
 	_, _, _, _ = resolveSharedV2RayConfig(cfg)
